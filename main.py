@@ -33,7 +33,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp مع تجاوز حماية يوتيوب (Client Spoofing)
+# خيارات yt-dlp مع تجاوز حماية يوتيوب نهائياً (iOS & Web Spoofing)
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -46,7 +46,7 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    'extractor_args': {'youtube': {'player_client': ['ios', 'web']}},
 }
 
 ffmpeg_options = {
