@@ -44,7 +44,6 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp مع التجاوز الذكي وتحديد مشغلات الهاتف
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -55,7 +54,7 @@ ytdl_format_options = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'auto',
+    'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
     'extractor_args': {
         'youtube': {
@@ -108,42 +107,14 @@ queues = {}
 
 
 async def resolve_smart_query(query, loop):
-  """يحاول تشغيل رابط يوتيوب من المصدر الأصلي أولاً، وفي حال الحظر يتحول تلقائياً إلى SoundCloud"""
+  """توجيه البحث ذكياً إلى يوتيوب لمنع مشاكل DRM الخاص بـ SoundCloud"""
   query = query.strip()
 
-  # 1. روابط يوتيوب -> محاولة المصدر الأصلي أولاً
+  # 1. رابط يوتيوب مباشر
   if 'youtube.com' in query or 'youtu.be' in query:
-    clean_url = query.split('&list=')[0].split('?list=')[0]
+    return query.split('&list=')[0].split('?list=')[0]
 
-    def test_yt():
-      return ytdl.extract_info(clean_url, download=False)
-
-    try:
-      data = await loop.run_in_executor(None, test_yt)
-      if data:
-        return clean_url
-    except Exception as e:
-      print(
-          f'YouTube Direct Blocked ({e}), switching to SoundCloud fallback...'
-      )
-
-    oembed_url = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
-
-    def fetch_yt_oembed():
-      req = urllib.request.Request(
-          oembed_url, headers={'User-Agent': 'Mozilla/5.0'}
-      )
-      with urllib.request.urlopen(req, timeout=5) as resp:
-        return json.loads(resp.read().decode()).get('title')
-
-    try:
-      title = await loop.run_in_executor(None, fetch_yt_oembed)
-      if title:
-        return f'scsearch:{title}'
-    except Exception as e:
-      print(f'oEmbed YT Error: {e}')
-
-  # 2. روابط سبوتيفاي -> استخراج العنوان والبحث في SoundCloud
+  # 2. رابط سبوتيفاي -> استخراج الاسم والبحث في يوتيوب
   elif 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
@@ -157,16 +128,16 @@ async def resolve_smart_query(query, loop):
     try:
       title = await loop.run_in_executor(None, fetch_spotify)
       if title:
-        return f'scsearch:{title}'
+        return f'ytsearch:{title}'
     except Exception as e:
-      print(f'oEmbed Spotify Error: {e}')
+      print(f'Spotify error: {e}')
 
-  # 3. روابط مباشرة أخرى
+  # 3. أي رابط آخر
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
-  # 4. البحث النصي العادي
-  return f'scsearch:{query}'
+  # 4. البحث النصي العادي -> البحث المباشر في يوتيوب
+  return f'ytsearch:{query}'
 
 
 @bot.event
@@ -314,7 +285,6 @@ async def on_message(message):
 # ==================== (تشغيل البوت) ====================
 if __name__ == '__main__':
   keep_alive()
-  # الكشف عن التوكن سواء كان اسمه TOKEN أو DISCORD_TOKEN
   TOKEN = os.getenv('DISCORD_TOKEN') or os.getenv('TOKEN')
   if TOKEN:
     bot.run(TOKEN)
