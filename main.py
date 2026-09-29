@@ -15,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Music Bot with OAuth2 Support is Online!'
+  return 'Music Bot is Online!'
 
 
 def run():
@@ -29,6 +29,23 @@ def keep_alive():
   t.start()
 
 
+# ==================== (فحص وقراءة ملف الكوكيز) ====================
+cookie_path = None
+if os.path.exists('/etc/secrets/cookies.txt'):
+  cookie_path = '/etc/secrets/cookies.txt'
+  print(
+      '✅ تم العثور على ملف الكوكيز في Render (/etc/secrets/cookies.txt)',
+      flush=True,
+  )
+elif os.path.exists('cookies.txt'):
+  cookie_path = 'cookies.txt'
+  print('✅ تم العثور على ملف الكوكيز المحلي (cookies.txt)', flush=True)
+else:
+  print(
+      '⚠️ لم يتم العثور على ملف cookies.txt، سيعمل البوت بالنظام الاحتياطي.',
+      flush=True,
+  )
+
 # ==================== (إعدادات البوت و yt-dlp) ====================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -37,7 +54,6 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp مع تفعيل OAuth2 للتسجيل كـ Smart TV
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -46,15 +62,14 @@ ytdl_format_options = {
     'nocheckcertificate': True,
     'ignoreerrors': True,
     'logtostderr': False,
-    'quiet': False,  # نتركه False حتى يطبع رابط OAuth2 بوضوح في Logs
-    'no_warnings': False,
+    'quiet': True,
+    'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'username': 'oauth2',  # تفعيل OAuth2
-    'password': '',
+    'cookiefile': cookie_path,  # تفعيل الكوكيز مباشرة
     'extractor_args': {
         'youtube': {
-            'player_client': ['android_vr', 'web_creator', 'ios', 'android'],
+            'player_client': ['ios', 'android', 'mweb'],
             'skip': ['hls', 'dash'],
         }
     },
@@ -88,13 +103,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     data = None
 
-    # 1. محاولة التشغيل المباشر عبر يوتيوب (بواسطة حساب OAuth2)
+    # 1. المحاولة الأساسية عبر يوتيوب (باستخدام الكوكيز)
     try:
       data = await loop.run_in_executor(None, lambda: extract(url_or_query))
     except Exception as e:
       print(
-          f'⚠️ تنبيه يوتيوب ({e})، جاري التجهيز للتحويل الاحتياطي...',
-          flush=True,
+          f'⚠️ خطأ يوتيوب ({e}) | جاري تحويل الطلب احتياطياً...', flush=True
       )
 
     if data and 'entries' in data and data['entries']:
@@ -109,7 +123,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
       clean_search = (
           url_or_query.replace('ytsearch:', '').split('&')[0].split('?')[0]
       )
-      # إذا كان المدخل رابط يوتيوب وفشل، نحوله لبحث باسم عام
       if 'youtube.com' in clean_search or 'youtu.be' in clean_search:
         clean_search = 'TUL8TE Garee2a Awy'
 
@@ -180,7 +193,7 @@ async def resolve_smart_query(query, loop):
 async def on_ready():
   print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}', flush=True)
   await bot.change_presence(
-      activity=discord.Game(name='Music 24/7 | OAuth2 Enabled')
+      activity=discord.Game(name='Music 24/7 | Cookies Active')
   )
 
 
