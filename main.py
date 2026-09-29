@@ -15,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Music Bot is Online with Pure YouTube & Spotify Support!'
+  return 'Music Bot is Online and Streaming 24/7!'
 
 
 def run():
@@ -36,7 +36,6 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp المتطورة لتجاوز حظر يوتيوب على سيرفرات Render
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -47,24 +46,9 @@ ytdl_format_options = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'ytsearch',
+    'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['tv_embedded', 'ios', 'android', 'mweb'],
-        }
-    },
-    'http_headers': {
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-        )
-    },
 }
-
-# قراءة ملف الكوكيز تلقائياً في حال وجوده في المشروع
-if os.path.exists('cookies.txt'):
-  ytdl_format_options['cookiefile'] = 'cookies.txt'
 
 ffmpeg_options = {
     'before_options': (
@@ -104,11 +88,44 @@ queues = {}
 
 
 async def resolve_smart_query(query, loop):
-  """تحويل كافة الطلبات (سبوتيفاي، روابط يوتيوب، أو البحث النصي) إلى يوتيوب فقط"""
+  """يحاول تشغيل رابط يوتيوب من المصدر الأصلي أولاً، وفي حال الحظر يتحول تلقائياً إلى SoundCloud"""
   query = query.strip()
 
-  # 1. روابط سبوتيفاي -> استخراج العنوان والبحث في يوتيوب
-  if 'spotify.com' in query:
+  # 1. روابط يوتيوب -> محاولة المصدر الأصلي أولاً
+  if 'youtube.com' in query or 'youtu.be' in query:
+    clean_url = query.split('&list=')[0].split('?list=')[0]
+
+    def test_yt():
+      return ytdl.extract_info(clean_url, download=False)
+
+    try:
+      data = await loop.run_in_executor(None, test_yt)
+      if data:
+        return clean_url
+    except Exception as e:
+      print(
+          f'YouTube Direct Blocked ({e}), switching to SoundCloud fallback...'
+      )
+
+    # التحويل الاحتياطي عند حظر يوتيوب عبر oEmbed
+    oembed_url = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
+
+    def fetch_yt_oembed():
+      req = urllib.request.Request(
+          oembed_url, headers={'User-Agent': 'Mozilla/5.0'}
+      )
+      with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read().decode()).get('title')
+
+    try:
+      title = await loop.run_in_executor(None, fetch_yt_oembed)
+      if title:
+        return f'scsearch:{title}'
+    except Exception as e:
+      print(f'oEmbed YT Error: {e}')
+
+  # 2. روابط سبوتيفاي -> استخراج العنوان عبر oEmbed والبحث في SoundCloud
+  elif 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
     def fetch_spotify():
@@ -121,28 +138,25 @@ async def resolve_smart_query(query, loop):
     try:
       title = await loop.run_in_executor(None, fetch_spotify)
       if title:
-        return f'ytsearch:{title}'
+        return f'scsearch:{title}'
     except Exception as e:
-      print(f'Spotify oEmbed Error: {e}')
+      print(f'oEmbed Spotify Error: {e}')
 
-  # 2. روابط يوتيوب المباشرة
-  elif 'youtube.com' in query or 'youtu.be' in query:
-    clean_url = query.split('&list=')[0].split('?list=')[0]
-    return clean_url
-
-  # 3. أي رابط آخر
+  # 3. روابط ساوند كلاود أو الروابط المباشرة
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
-  # 4. البحث النصي العادي في يوتيوب
-  return f'ytsearch:{query}'
+  # 4. البحث النصي العادي
+  return f'scsearch:{query}'
 
 
 @bot.event
 async def on_ready():
   print(f'تم تسجيل الدخول بنجاح: {bot.user.name}')
   await bot.change_presence(
-      activity=discord.Game(name='Music | YouTube & Spotify Only')
+      activity=discord.Game(
+          name='Multi-Platform Music | YouTube / Spotify / SoundCloud'
+      )
   )
 
 
