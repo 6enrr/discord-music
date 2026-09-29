@@ -15,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Music Bot is Online and Streaming 24/7!'
+  return 'Music Bot is Online with Pure YouTube & Spotify Support!'
 
 
 def run():
@@ -50,10 +50,29 @@ ytdl_format_options = {
     'source_address': '0.0.0.0',
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios', 'android', 'mweb'],
+            'player_client': ['tv_embedded', 'ios', 'android', 'mweb'],
         }
     },
+    'http_headers': {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        )
+    },
 }
+
+# فحص مسار الكوكيز في Render أو المحلي
+render_cookie_path = '/etc/secrets/cookies.txt'
+local_cookie_path = 'cookies.txt'
+
+if os.path.exists(render_cookie_path):
+  ytdl_format_options['cookiefile'] = render_cookie_path
+  print(f'✅ Loaded cookies from Render Secret File: {render_cookie_path}')
+elif os.path.exists(local_cookie_path):
+  ytdl_format_options['cookiefile'] = local_cookie_path
+  print(f'✅ Loaded cookies from local path: {local_cookie_path}')
+else:
+  print('⚠️ No cookies file found!')
 
 ffmpeg_options = {
     'before_options': (
@@ -93,44 +112,10 @@ queues = {}
 
 
 async def resolve_smart_query(query, loop):
-  """تشغيل من يوتيوب مباشرة، وإن تم حظر رابط الفيديو المباشر يتم استخراج العنوان والبحث عنه في يوتيوب تلقائياً"""
   query = query.strip()
 
-  # 1. روابط يوتيوب
-  if 'youtube.com' in query or 'youtu.be' in query:
-    clean_url = query.split('&list=')[0].split('?list=')[0]
-
-    def test_yt():
-      return ytdl.extract_info(clean_url, download=False)
-
-    try:
-      data = await loop.run_in_executor(None, test_yt)
-      if data:
-        return clean_url
-    except Exception as e:
-      print(f'YouTube direct link restricted ({e}), resolving title...')
-
-    # عند حظر الرابط المباشر من يوتيوب، نجلب عنوان الفيديو بـ oEmbed ونبحث عنه في يوتيوب
-    oembed_url = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
-
-    def fetch_yt_oembed():
-      req = urllib.request.Request(
-          oembed_url, headers={'User-Agent': 'Mozilla/5.0'}
-      )
-      with urllib.request.urlopen(req, timeout=5) as resp:
-        return json.loads(resp.read().decode()).get('title')
-
-    try:
-      title = await loop.run_in_executor(None, fetch_yt_oembed)
-      if title:
-        return f'ytsearch:{title}'
-    except Exception as e:
-      print(f'oEmbed YT Error: {e}')
-
-    return clean_url
-
-  # 2. روابط سبوتيفاي -> استخراج العنوان والبحث في يوتيوب
-  elif 'spotify.com' in query:
+  # 1. روابط سبوتيفاي -> استخراج العنوان والبحث في يوتيوب
+  if 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
     def fetch_spotify():
@@ -145,9 +130,14 @@ async def resolve_smart_query(query, loop):
       if title:
         return f'ytsearch:{title}'
     except Exception as e:
-      print(f'oEmbed Spotify Error: {e}')
+      print(f'Spotify oEmbed Error: {e}')
 
-  # 3. أي رابط عادي آخر
+  # 2. روابط يوتيوب المباشرة (تنظيف رابط القائمة &list=)
+  elif 'youtube.com' in query or 'youtu.be' in query:
+    clean_url = query.split('&list=')[0].split('?list=')[0]
+    return clean_url
+
+  # 3. أي رابط آخر
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
@@ -159,7 +149,7 @@ async def resolve_smart_query(query, loop):
 async def on_ready():
   print(f'تم تسجيل الدخول بنجاح: {bot.user.name}')
   await bot.change_presence(
-      activity=discord.Game(name='Multi-Platform Music | YouTube & Spotify')
+      activity=discord.Game(name='Music | YouTube & Spotify Only')
   )
 
 
@@ -286,7 +276,7 @@ async def on_message(message):
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
       message.guild.voice_client.stop()
-      await message.channel.send('⏭️️ | **تم تخطي الأغنية بنجاح!**')
+      await message.channel.send('⏭️ | **تم تخطي الأغنية بنجاح!**')
     else:
       await message.channel.send(
           '❌ | **لا توجد أي أغنية تعمل حالياً للتخطي.**'
