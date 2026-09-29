@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import re
 import threading
 import urllib.parse
 import urllib.request
@@ -16,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Music Bot is Online!'
+  return 'YouTube Bot with POT Provider is Online!'
 
 
 def run():
@@ -41,10 +40,8 @@ if os.path.exists('/etc/secrets/cookies.txt'):
 elif os.path.exists('cookies.txt'):
   cookie_path = 'cookies.txt'
   print('✅ تم العثور على ملف الكوكيز المحلي (cookies.txt)', flush=True)
-else:
-  print('⚠️ لم يتم العثور على ملف cookies.txt', flush=True)
 
-# ==================== (إعدادات البوت و yt-dlp) ====================
+# ==================== (إعدادات yt-dlp مع دعم PO Token) ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -58,17 +55,18 @@ ytdl_format_options = {
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
-    'ignoreerrors': True,
+    'ignoreerrors': False,
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'auto',
+    'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
     'cookiefile': cookie_path,
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios', 'android', 'mweb'],
-            'skip': ['hls', 'dash'],
+            'player_client': ['tv_embedded', 'ios', 'mweb', 'android'],
+            'player_skip': ['webpage', 'configs'],
+            'po_token': 'auto',  # استدعاء تلقائي لمكتبة yt-dlp-get-pot
         }
     },
 }
@@ -81,22 +79,6 @@ ffmpeg_options = {
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-
-
-def get_yt_title_via_oembed(url):
-  """جلب عنوان فيديو يوتيوب عبر API الرسمية المفتوحة بدون حظر Render"""
-  try:
-    clean_url = url.split('&')[0]
-    oembed_endpoint = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
-    req = urllib.request.Request(
-        oembed_endpoint, headers={'User-Agent': 'Mozilla/5.0'}
-    )
-    with urllib.request.urlopen(req, timeout=5) as resp:
-      data = json.loads(resp.read().decode())
-      return data.get('title')
-  except Exception as e:
-    print(f'oEmbed Error: {e}', flush=True)
-    return None
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -115,60 +97,15 @@ class YTDLSource(discord.PCMVolumeTransformer):
     def extract(target):
       return ytdl.extract_info(target, download=not stream)
 
-    data = None
-
-    # 1. محاولة التشغيل المباشر عبر يوتيوب
-    try:
-      data = await loop.run_in_executor(None, lambda: extract(url_or_query))
-    except Exception as e:
-      print(f'⚠️ تنبيه يوتيوب ({e}) | تحويل الطلب احتياطياً...', flush=True)
+    data = await loop.run_in_executor(None, lambda: extract(url_or_query))
 
     if data and 'entries' in data and data['entries']:
       valid_entries = [e for e in data['entries'] if e]
       if valid_entries:
         data = valid_entries[0]
-      else:
-        data = None
-
-    # 2. نظام الطوارئ الذكي: التحويل واستخراج العنوان الصحيح تلقائياً
-    if not data or 'url' not in data:
-      search_term = url_or_query.replace('ytsearch:', '')
-
-      # إذا كان المدخل رابط يوتيوب وفشل تشغيله مباشرة، نجلب عنوان الفيديو الأصلي عبر oEmbed
-      if 'youtube.com' in search_term or 'youtu.be' in search_term:
-        yt_title = await loop.run_in_executor(
-            None, lambda: get_yt_title_via_oembed(search_term)
-        )
-        if yt_title:
-          search_term = yt_title
-          print(
-              f'📌 تم استخراج عنوان الفيديو الأصلي بنجاح: {yt_title}',
-              flush=True,
-          )
-
-      sc_query = f'scsearch5:{search_term}'
-      print(f'🔄 جاري البحث المتقدم على SoundCloud: {sc_query}', flush=True)
-
-      try:
-        sc_data = await loop.run_in_executor(None, lambda: extract(sc_query))
-        if sc_data and 'entries' in sc_data:
-          for entry in sc_data['entries']:
-            if not entry:
-              continue
-            try:
-              test_data = await loop.run_in_executor(
-                  None, lambda: extract(entry['webpage_url'])
-              )
-              if test_data and 'url' in test_data:
-                data = test_data
-                break
-            except Exception:
-              continue
-      except Exception as sc_err:
-        print(f'SoundCloud fallback error: {sc_err}', flush=True)
 
     if not data or 'url' not in data:
-      raise Exception('تعذر جلب الصوت. يرجى تجربة اسم أو رابط آخر.')
+      raise Exception('لم يرجع يوتيوب أي رابط صوتي صالح.')
 
     filename = data['url'] if stream else ytdl.prepare_filename(data)
     return cls(
@@ -180,28 +117,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
 queues = {}
 
 
-async def resolve_smart_query(query, loop):
+async def resolve_smart_query(query):
   query = query.strip()
 
   if 'youtube.com' in query or 'youtu.be' in query:
     return query.split('&list=')[0].split('?list=')[0]
-
-  elif 'spotify.com' in query:
-    oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
-
-    def fetch_spotify():
-      req = urllib.request.Request(
-          oembed_url, headers={'User-Agent': 'Mozilla/5.0'}
-      )
-      with urllib.request.urlopen(req, timeout=5) as resp:
-        return json.loads(resp.read().decode()).get('title')
-
-    try:
-      title = await loop.run_in_executor(None, fetch_spotify)
-      if title:
-        return f'ytsearch:{title}'
-    except Exception as e:
-      print(f'Spotify Error: {e}', flush=True)
 
   elif query.startswith('http://') or query.startswith('https://'):
     return query
@@ -212,9 +132,6 @@ async def resolve_smart_query(query, loop):
 @bot.event
 async def on_ready():
   print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}', flush=True)
-  await bot.change_presence(
-      activity=discord.Game(name='Music 24/7 | Auto Fallback')
-  )
 
 
 async def play_next(guild, channel, loop_bot):
@@ -237,12 +154,12 @@ async def play_next(guild, channel, loop_bot):
           ),
       )
       embed = discord.Embed(
-          title='♪ Now Playing', color=discord.Color.from_rgb(255, 119, 0)
+          title='♪ Now Playing (YouTube Direct + POT)', color=discord.Color.red()
       )
       embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{author}`'
       await channel.send(embed=embed)
     except Exception as e:
-      print(f'خطأ في تشغيل التالي: {e}', flush=True)
+      await channel.send(f'❌ **خطأ يوتيوب المباشر:** `{e}`')
       await play_next(guild, channel, loop_bot)
 
 
@@ -257,7 +174,7 @@ async def on_message(message):
   ):
     if not message.author.voice:
       return await message.channel.send(
-          '❌ | **يجب أن تكون متصلاً بروم صوتية لكي أستطيع الدخول إليك!**'
+          '❌ | **يجب أن تكون متصلاً بروم صوتية!**'
       )
 
     voice_channel = message.author.voice.channel
@@ -301,7 +218,7 @@ async def on_message(message):
 
     try:
       async with message.channel.typing():
-        search_query = await resolve_smart_query(raw_query, bot.loop)
+        search_query = await resolve_smart_query(raw_query)
         player = await YTDLSource.from_url(
             search_query, loop=bot.loop, stream=True
         )
@@ -327,12 +244,14 @@ async def on_message(message):
             ),
         )
         embed = discord.Embed(
-            title='♪ Now Playing', color=discord.Color.from_rgb(255, 119, 0)
+            title='♪ Now Playing (YouTube Direct + POT)', color=discord.Color.red()
         )
         embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{message.author.name}`'
         await message.channel.send(embed=embed)
     except Exception as e:
-      await message.channel.send(f'❌ | **حدث خطأ أثناء جلب الأغنية:** `{e}`')
+      await message.channel.send(
+          f'❌ **خطأ يوتيوب المباشر:**\n```{str(e)}```'
+      )
 
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
