@@ -15,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Music Bot is Online with YouTube & Spotify Support!'
+  return 'Music Bot is Online with Pure YouTube & Spotify Support!'
 
 
 def run():
@@ -28,7 +28,7 @@ def keep_alive():
   t.start()
 
 
-# ==================== (إعدادات البوت) ====================
+# ==================== (إعدادات البوت وخيارات تجاوز حظر يوتيوب) ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -36,6 +36,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# خيارات yt-dlp لتجاوز حماية يوتيوب ضد البوتات في سيرفرات Render
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -48,7 +49,23 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
+    # محاكاة طلبات تطبيقات الهواتف الذكية لتجاوز "Sign in to confirm you're not a bot"
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios', 'android', 'mweb'],
+        }
+    },
+    'http_headers': {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        )
+    },
 }
+
+# إذا وجد ملف cookies.txt في السيرفر سيتم استخدامه تلقائياً
+if os.path.exists('cookies.txt'):
+  ytdl_format_options['cookiefile'] = 'cookies.txt'
 
 ffmpeg_options = {
     'before_options': (
@@ -88,10 +105,10 @@ queues = {}
 
 
 async def resolve_smart_query(query, loop):
-  """معالجة الاستعلام: روابط سبوتيفاي تتحول لاسم الأغنية للبحث في يوتيوب، وروابط يوتيوب أو البحث النصي تعمل مباشرة"""
+  """تحويل روابط سبوتيفاي إلى اسم الأغنية للبحث في يوتيوب، وتشغيل يوتيوب مباشرة"""
   query = query.strip()
 
-  # 1. روابط سبوتيفاي -> استخراج الاسم والبحث في يوتيوب
+  # 1. روابط سبوتيفاي -> استخراج عنوان الأغنية والبحث عنها في يوتيوب
   if 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
@@ -109,7 +126,7 @@ async def resolve_smart_query(query, loop):
     except Exception as e:
       print(f'Spotify oEmbed Error: {e}')
 
-  # 2. روابط يوتيوب المباشرة
+  # 2. روابط يوتيوب المباشرة (تنظيف رابط البلاي ليست إن وجد)
   elif 'youtube.com' in query or 'youtu.be' in query:
     clean_url = query.split('&list=')[0].split('?list=')[0]
     return clean_url
@@ -118,7 +135,7 @@ async def resolve_smart_query(query, loop):
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
-  # 4. البحث النصي العادي في يوتيوب
+  # 4. البحث النصي العادي عبر يوتيوب
   return f'ytsearch:{query}'
 
 
@@ -126,7 +143,7 @@ async def resolve_smart_query(query, loop):
 async def on_ready():
   print(f'تم تسجيل الدخول بنجاح: {bot.user.name}')
   await bot.change_presence(
-      activity=discord.Game(name='Music | YouTube & Spotify')
+      activity=discord.Game(name='Music | YouTube & Spotify Only')
   )
 
 
@@ -155,7 +172,7 @@ async def play_next(guild, channel, loop_bot):
       embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{author}`'
       await channel.send(embed=embed)
     except Exception as e:
-      print(f'خطأ في تشغيل التالي: {e}')
+      print(f'خطأ في تشغيل الأغنية التالية: {e}')
       await play_next(guild, channel, loop_bot)
 
 
