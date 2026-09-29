@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -41,10 +42,7 @@ elif os.path.exists('cookies.txt'):
   cookie_path = 'cookies.txt'
   print('✅ تم العثور على ملف الكوكيز المحلي (cookies.txt)', flush=True)
 else:
-  print(
-      '⚠️ لم يتم العثور على ملف cookies.txt، سيعمل البوت بالنظام الاحتياطي.',
-      flush=True,
-  )
+  print('⚠️ لم يتم العثور على ملف cookies.txt', flush=True)
 
 # ==================== (إعدادات البوت و yt-dlp) ====================
 intents = discord.Intents.default()
@@ -66,7 +64,7 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'cookiefile': cookie_path,  # تفعيل الكوكيز مباشرة
+    'cookiefile': cookie_path,
     'extractor_args': {
         'youtube': {
             'player_client': ['ios', 'android', 'mweb'],
@@ -83,6 +81,22 @@ ffmpeg_options = {
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+
+
+def get_yt_title_via_oembed(url):
+  """جلب عنوان فيديو يوتيوب عبر API الرسمية المفتوحة بدون حظر Render"""
+  try:
+    clean_url = url.split('&')[0]
+    oembed_endpoint = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
+    req = urllib.request.Request(
+        oembed_endpoint, headers={'User-Agent': 'Mozilla/5.0'}
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+      data = json.loads(resp.read().decode())
+      return data.get('title')
+  except Exception as e:
+    print(f'oEmbed Error: {e}', flush=True)
+    return None
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -103,13 +117,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     data = None
 
-    # 1. المحاولة الأساسية عبر يوتيوب (باستخدام الكوكيز)
+    # 1. محاولة التشغيل المباشر عبر يوتيوب
     try:
       data = await loop.run_in_executor(None, lambda: extract(url_or_query))
     except Exception as e:
-      print(
-          f'⚠️ خطأ يوتيوب ({e}) | جاري تحويل الطلب احتياطياً...', flush=True
-      )
+      print(f'⚠️ تنبيه يوتيوب ({e}) | تحويل الطلب احتياطياً...', flush=True)
 
     if data and 'entries' in data and data['entries']:
       valid_entries = [e for e in data['entries'] if e]
@@ -118,15 +130,23 @@ class YTDLSource(discord.PCMVolumeTransformer):
       else:
         data = None
 
-    # 2. خطة الطوارئ: التحويل إلى SoundCloud في حال تعذر يوتيوب
+    # 2. نظام الطوارئ الذكي: التحويل واستخراج العنوان الصحيح تلقائياً
     if not data or 'url' not in data:
-      clean_search = (
-          url_or_query.replace('ytsearch:', '').split('&')[0].split('?')[0]
-      )
-      if 'youtube.com' in clean_search or 'youtu.be' in clean_search:
-        clean_search = 'TUL8TE Garee2a Awy'
+      search_term = url_or_query.replace('ytsearch:', '')
 
-      sc_query = f'scsearch5:{clean_search}'
+      # إذا كان المدخل رابط يوتيوب وفشل تشغيله مباشرة، نجلب عنوان الفيديو الأصلي عبر oEmbed
+      if 'youtube.com' in search_term or 'youtu.be' in search_term:
+        yt_title = await loop.run_in_executor(
+            None, lambda: get_yt_title_via_oembed(search_term)
+        )
+        if yt_title:
+          search_term = yt_title
+          print(
+              f'📌 تم استخراج عنوان الفيديو الأصلي بنجاح: {yt_title}',
+              flush=True,
+          )
+
+      sc_query = f'scsearch5:{search_term}'
       print(f'🔄 جاري البحث المتقدم على SoundCloud: {sc_query}', flush=True)
 
       try:
@@ -193,7 +213,7 @@ async def resolve_smart_query(query, loop):
 async def on_ready():
   print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}', flush=True)
   await bot.change_presence(
-      activity=discord.Game(name='Music 24/7 | Cookies Active')
+      activity=discord.Game(name='Music 24/7 | Auto Fallback')
   )
 
 
