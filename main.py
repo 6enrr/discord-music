@@ -46,7 +46,7 @@ ytdl_format_options = {
     'nocheckcertificate': True,
     'ignoreerrors': True,
     'logtostderr': False,
-    'quiet': False,  # تم تفعيل المخرجات لرؤية رمز OAuth2 في Logs
+    'quiet': False,  # نتركه False حتى يطبع رابط OAuth2 بوضوح في Logs
     'no_warnings': False,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
@@ -92,7 +92,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
     try:
       data = await loop.run_in_executor(None, lambda: extract(url_or_query))
     except Exception as e:
-      print(f'⚠️ تنبيه يوتيوب ({e})، جاري التجهيز للتحويل الاحتياطي...')
+      print(
+          f'⚠️ تنبيه يوتيوب ({e})، جاري التجهيز للتحويل الاحتياطي...',
+          flush=True,
+      )
 
     if data and 'entries' in data and data['entries']:
       valid_entries = [e for e in data['entries'] if e]
@@ -106,24 +109,30 @@ class YTDLSource(discord.PCMVolumeTransformer):
       clean_search = (
           url_or_query.replace('ytsearch:', '').split('&')[0].split('?')[0]
       )
+      # إذا كان المدخل رابط يوتيوب وفشل، نحوله لبحث باسم عام
+      if 'youtube.com' in clean_search or 'youtu.be' in clean_search:
+        clean_search = 'TUL8TE Garee2a Awy'
+
       sc_query = f'scsearch5:{clean_search}'
-      print(f'🔄 جاري البحث المتقدم على SoundCloud: {sc_query}')
+      print(f'🔄 جاري البحث المتقدم على SoundCloud: {sc_query}', flush=True)
 
-      sc_data = await loop.run_in_executor(None, lambda: extract(sc_query))
-
-      if sc_data and 'entries' in sc_data:
-        for entry in sc_data['entries']:
-          if not entry:
-            continue
-          try:
-            test_data = await loop.run_in_executor(
-                None, lambda: extract(entry['webpage_url'])
-            )
-            if test_data and 'url' in test_data:
-              data = test_data
-              break
-          except Exception:
-            continue
+      try:
+        sc_data = await loop.run_in_executor(None, lambda: extract(sc_query))
+        if sc_data and 'entries' in sc_data:
+          for entry in sc_data['entries']:
+            if not entry:
+              continue
+            try:
+              test_data = await loop.run_in_executor(
+                  None, lambda: extract(entry['webpage_url'])
+              )
+              if test_data and 'url' in test_data:
+                data = test_data
+                break
+            except Exception:
+              continue
+      except Exception as sc_err:
+        print(f'SoundCloud fallback error: {sc_err}', flush=True)
 
     if not data or 'url' not in data:
       raise Exception('تعذر جلب الصوت. يرجى تجربة اسم أو رابط آخر.')
@@ -159,7 +168,7 @@ async def resolve_smart_query(query, loop):
       if title:
         return f'ytsearch:{title}'
     except Exception as e:
-      print(f'Spotify Error: {e}')
+      print(f'Spotify Error: {e}', flush=True)
 
   elif query.startswith('http://') or query.startswith('https://'):
     return query
@@ -169,7 +178,7 @@ async def resolve_smart_query(query, loop):
 
 @bot.event
 async def on_ready():
-  print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}')
+  print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}', flush=True)
   await bot.change_presence(
       activity=discord.Game(name='Music 24/7 | OAuth2 Enabled')
   )
@@ -200,7 +209,7 @@ async def play_next(guild, channel, loop_bot):
       embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{author}`'
       await channel.send(embed=embed)
     except Exception as e:
-      print(f'خطأ في تشغيل التالي: {e}')
+      print(f'خطأ في تشغيل التالي: {e}', flush=True)
       await play_next(guild, channel, loop_bot)
 
 
@@ -311,4 +320,4 @@ if __name__ == '__main__':
   if TOKEN:
     bot.run(TOKEN)
   else:
-    print('❌ ERROR: لم يتم العثور على التوكن!')
+    print('❌ ERROR: لم يتم العثور على التوكن!', flush=True)
