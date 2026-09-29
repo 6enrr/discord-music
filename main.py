@@ -44,21 +44,23 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# خيارات yt-dlp المتطورة لتجاوز حظر يوتيوب على السيرفرات
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
-    'ignoreerrors': False,
+    'ignoreerrors': True,
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'ytsearch',
+    'default_search': 'auto',
     'source_address': '0.0.0.0',
     'extractor_args': {
         'youtube': {
-            'player_client': ['mweb', 'ios', 'android'],
+            'player_client': ['android_vr', 'web_creator', 'ios', 'android'],
+            'skip': ['hls', 'dash'],
         }
     },
 }
@@ -89,13 +91,58 @@ class YTDLSource(discord.PCMVolumeTransformer):
     self.uploader = data.get('uploader', 'غير معروف')
 
   @classmethod
-  async def from_url(cls, url, *, loop=None, stream=True):
+  async def from_url(cls, url_or_query, *, loop=None, stream=True):
     loop = loop or asyncio.get_event_loop()
-    data = await loop.run_in_executor(
-        None, lambda: ytdl.extract_info(url, download=not stream)
-    )
-    if 'entries' in data and data['entries']:
-      data = data['entries'][0]
+
+    def extract(target):
+      return ytdl.extract_info(target, download=not stream)
+
+    data = None
+
+    # 1. محاولة التشغيل المباشر عبر يوتيوب
+    try:
+      data = await loop.run_in_executor(None, lambda: extract(url_or_query))
+    except Exception as e:
+      print(f'⚠️ فشل يوتيوب المباشر ({e})، جاري التحديد والتحويل البديل...')
+
+    # إذا رجعت القائمة تحتوي على نتائج بحث يوتيوب
+    if data and 'entries' in data and data['entries']:
+      valid_entries = [e for e in data['entries'] if e]
+      if valid_entries:
+        data = valid_entries[0]
+      else:
+        data = None
+
+    # 2. خطة الطوارئ: التحويل إلى SoundCloud مع فلترة ملفات DRM تلقائياً
+    if not data or 'url' not in data:
+      clean_search = (
+          url_or_query.replace('ytsearch:', '').split('&')[0].split('?')[0]
+      )
+      sc_query = f'scsearch5:{clean_search}'
+      print(f'🔄 جاري البحث المتقدم على SoundCloud: {sc_query}')
+
+      sc_data = await loop.run_in_executor(None, lambda: extract(sc_query))
+
+      if sc_data and 'entries' in sc_data:
+        for entry in sc_data['entries']:
+          if not entry:
+            continue
+          # تجنب مقاطع DRM المعتمدة في ساوند كلاود
+          try:
+            test_data = await loop.run_in_executor(
+                None, lambda: extract(entry['webpage_url'])
+            )
+            if test_data and 'url' in test_data:
+              data = test_data
+              break
+          except Exception:
+            continue
+
+    if not data or 'url' not in data:
+      raise Exception(
+          'تعذر جلب الصوت من يوتيوب أو SoundCloud. يرجى تجربة اسم آخر.'
+      )
+
     filename = data['url'] if stream else ytdl.prepare_filename(data)
     return cls(
         discord.FFmpegPCMAudio(filename, **ffmpeg_options),
@@ -107,14 +154,13 @@ queues = {}
 
 
 async def resolve_smart_query(query, loop):
-  """توجيه البحث ذكياً إلى يوتيوب لمنع مشاكل DRM الخاص بـ SoundCloud"""
   query = query.strip()
 
-  # 1. رابط يوتيوب مباشر
+  # رابط يوتيوب مباشر
   if 'youtube.com' in query or 'youtu.be' in query:
     return query.split('&list=')[0].split('?list=')[0]
 
-  # 2. رابط سبوتيفاي -> استخراج الاسم والبحث في يوتيوب
+  # رابط سبوتيفاي -> جلب العنوان والبحث
   elif 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
@@ -130,13 +176,12 @@ async def resolve_smart_query(query, loop):
       if title:
         return f'ytsearch:{title}'
     except Exception as e:
-      print(f'Spotify error: {e}')
+      print(f'Spotify Error: {e}')
 
-  # 3. أي رابط آخر
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
-  # 4. البحث النصي العادي -> البحث المباشر في يوتيوب
+  # البحث النصي المباشر
   return f'ytsearch:{query}'
 
 
