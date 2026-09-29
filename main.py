@@ -46,8 +46,13 @@ ytdl_format_options = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'auto',
+    'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios', 'android', 'mweb'],
+        }
+    },
 }
 
 ffmpeg_options = {
@@ -88,10 +93,10 @@ queues = {}
 
 
 async def resolve_smart_query(query, loop):
-  """يحاول تشغيل رابط يوتيوب من المصدر الأصلي أولاً، وفي حال الحظر يتحول تلقائياً إلى SoundCloud"""
+  """تشغيل من يوتيوب مباشرة، وإن تم حظر رابط الفيديو المباشر يتم استخراج العنوان والبحث عنه في يوتيوب تلقائياً"""
   query = query.strip()
 
-  # 1. روابط يوتيوب -> محاولة المصدر الأصلي أولاً
+  # 1. روابط يوتيوب
   if 'youtube.com' in query or 'youtu.be' in query:
     clean_url = query.split('&list=')[0].split('?list=')[0]
 
@@ -103,11 +108,9 @@ async def resolve_smart_query(query, loop):
       if data:
         return clean_url
     except Exception as e:
-      print(
-          f'YouTube Direct Blocked ({e}), switching to SoundCloud fallback...'
-      )
+      print(f'YouTube direct link restricted ({e}), resolving title...')
 
-    # التحويل الاحتياطي عند حظر يوتيوب عبر oEmbed
+    # عند حظر الرابط المباشر من يوتيوب، نجلب عنوان الفيديو بـ oEmbed ونبحث عنه في يوتيوب
     oembed_url = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
 
     def fetch_yt_oembed():
@@ -120,11 +123,13 @@ async def resolve_smart_query(query, loop):
     try:
       title = await loop.run_in_executor(None, fetch_yt_oembed)
       if title:
-        return f'scsearch:{title}'
+        return f'ytsearch:{title}'
     except Exception as e:
       print(f'oEmbed YT Error: {e}')
 
-  # 2. روابط سبوتيفاي -> استخراج العنوان عبر oEmbed والبحث في SoundCloud
+    return clean_url
+
+  # 2. روابط سبوتيفاي -> استخراج العنوان والبحث في يوتيوب
   elif 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
@@ -138,25 +143,23 @@ async def resolve_smart_query(query, loop):
     try:
       title = await loop.run_in_executor(None, fetch_spotify)
       if title:
-        return f'scsearch:{title}'
+        return f'ytsearch:{title}'
     except Exception as e:
       print(f'oEmbed Spotify Error: {e}')
 
-  # 3. روابط ساوند كلاود أو الروابط المباشرة
+  # 3. أي رابط عادي آخر
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
-  # 4. البحث النصي العادي
-  return f'scsearch:{query}'
+  # 4. البحث النصي العادي في يوتيوب
+  return f'ytsearch:{query}'
 
 
 @bot.event
 async def on_ready():
   print(f'تم تسجيل الدخول بنجاح: {bot.user.name}')
   await bot.change_presence(
-      activity=discord.Game(
-          name='Multi-Platform Music | YouTube / Spotify / SoundCloud'
-      )
+      activity=discord.Game(name='Multi-Platform Music | YouTube & Spotify')
   )
 
 
@@ -283,7 +286,7 @@ async def on_message(message):
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
       message.guild.voice_client.stop()
-      await message.channel.send('⏭️ | **تم تخطي الأغنية بنجاح!**')
+      await message.channel.send('⏭️️ | **تم تخطي الأغنية بنجاح!**')
     else:
       await message.channel.send(
           '❌ | **لا توجد أي أغنية تعمل حالياً للتخطي.**'
