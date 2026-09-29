@@ -1,67 +1,4 @@
 import asyncio
-import os
-import threading
-import aiohttp
-import discord
-from discord.ext import commands
-from flask import Flask
-import yt_dlp
-
-# ==================== (سيرفر Flask للتشغيل 24/7) ====================
-app = Flask('')
-
-
-@app.route('/')
-def home():
-  return 'Music Bot is Online with YouTube, Spotify & SoundCloud Support!'
-
-
-def run():
-  port = int(os.environ.get('PORT', 8080))
-  app.run(host='0.0.0.0', port=port)
-
-
-def keep_alive():
-  t = threading.Thread(target=run)
-  t.start()
-
-
-# ==================== (إعدادات البوت) ====================
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.voice_states = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-ytdl_format_options = {
-    'format': 'bestaudio/best',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-    'restrictfilenames': True,
-    'noplaylist': True,
-    'nocheckcertificate': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'auto',
-    'source_address': '0.0.0.0',
-}
-
-ffmpeg_options = {
-    'before_options': (
-        '-reconnect الحل الذكي والاحترافي لهذه المشكلة (بدون ما يرجع حظر يوتيوب ولا نحتاج كوكيز) هو استخدام تقنية **التحويل الذكي عبر oEmbed**:
-
-عندما يضع أي شخص رابط **YouTube** أو **Spotify**، يقوم البوت بقراءة عنوان الأغنية واسم الفنان فوراً وبشكل خفي عبر واجهة برمجية خفيفة رسمية لا تحظر السيرفرات، ثم يجلب الصوت ويشغله تلقائياً من **SoundCloud**! أما إذا كان الرابط **SoundCloud** مباشر أو اسم أغنية عادي، فيتم تشغيله كالمعتاد.
-
-بهذه الطريقة، يستطيع أي مستخدم وضع **أي رابط من أي منصة (YouTube / Spotify / SoundCloud / بحث نصي)**، وسيعمل البوت بشكل عام للجميع 100% وبدون أي أخطاء!
-
----
-
-### الكود المحدث والكامل لملف `main.py`:
-
-```python
-import asyncio
 import json
 import os
 import threading
@@ -157,7 +94,7 @@ async def resolve_smart_query(query, loop):
   # 1. روابط يوتيوب -> استخراج العنوان عبر oEmbed والبحث في SoundCloud
   if 'youtube.com' in query or 'youtu.be' in query:
     clean_url = query.split('&list=')[0].split('?list=')[0]
-    oembed_url = f'[https://www.youtube.com/oembed?url=](https://www.youtube.com/oembed?url=){urllib.parse.quote(clean_url, safe="")}&format=json'
+    oembed_url = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
 
     def fetch_yt():
       req = urllib.request.Request(
@@ -175,7 +112,7 @@ async def resolve_smart_query(query, loop):
 
   # 2. روابط سبوتيفاي -> استخراج العنوان والبحث في SoundCloud
   elif 'spotify.com' in query:
-    oembed_url = f'[https://open.spotify.com/oembed?url=](https://open.spotify.com/oembed?url=){urllib.parse.quote(query, safe="")}'
+    oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
     def fetch_spotify():
       req = urllib.request.Request(
