@@ -301,7 +301,7 @@ async def on_message(message):
         embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{message.author.name}`'
         await message.channel.send(embed=embed)
     except Exception as e:
-      await channel_error_msg = f'❌ **خطأ أثناء تشغيل يوتيوب:**\n```{str(e)}```'
+      channel_error_msg = f'❌ **خطأ أثناء تشغيل يوتيوب:**\n```{str(e)}```'
       await message.channel.send(channel_error_msg)
 
   # أمر التخطي (س)
