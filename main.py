@@ -38,7 +38,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ==================== (إعدادات yt-dlp الاحتياطية المتبسطة) ====================
+# ==================== (إعدادات yt-dlp الاحتياطية) ====================
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -63,18 +63,18 @@ ffmpeg_options = {
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 
-# ==================== (دالة استخراج الصوت عبر Piped API لتجاوز الحظر) ====================
+# ==================== (دالة استخراج الصوت عبر Piped API الذكية) ====================
 def get_piped_audio_stream(url_or_query):
-  """استخراج رابط الصوت المباشر من سيرفرات Piped الوسيطة لتخطي حظر Render نهائياً"""
+  """استخراج رابط الصوت المباشر من سيرفرات Piped لتخطي حظر يوتيوب وقوائم التشغيل"""
   video_id = None
 
-  # 1. استخراج الـ ID إذا كان الإدخال رابط يوتيوب
   if 'youtube.com' in url_or_query or 'youtu.be' in url_or_query:
-    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11})', url_or_query)
+    match = re.search(
+        r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[?&]|\b)', url_or_query
+    )
     if match:
       video_id = match.group(1)
   else:
-    # 2. إذا كان بحثاً نصياً، البحث داخل Piped API
     search_instances = [
         'https://pipedapi.kavin.rocks',
         'https://api.piped.private.coffee',
@@ -90,15 +90,18 @@ def get_piped_audio_stream(url_or_query):
           res = json.loads(resp.read().decode())
           items = res.get('items', [])
           if items and 'url' in items[0]:
-            video_id = items[0]['url'].split('v=')[-1]
-            break
+            sub_match = re.search(
+                r'(?:v=|\/)([0-9A-Za-z_-]{11})', items[0]['url']
+            )
+            if sub_match:
+              video_id = sub_match.group(1)
+              break
       except Exception:
         continue
 
   if not video_id:
     return None
 
-  # 3. جلب رابط الصوت المباشر بجودة عالية باستخدام الـ ID
   stream_instances = [
       'https://pipedapi.kavin.rocks',
       'https://api.piped.private.coffee',
@@ -147,7 +150,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
   async def from_url(cls, url_or_query, *, loop=None, stream=True):
     loop = loop or asyncio.get_event_loop()
 
-    # المحاولة الأولى عبر Piped API (لتخطي حظر Render IPs بالكامل)
     audio_data = await loop.run_in_executor(
         None, lambda: get_piped_audio_stream(url_or_query)
     )
@@ -158,7 +160,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
           data=audio_data,
       )
 
-    # المحاولة الثانية (Fallback) عبر yt-dlp الأساسي
     def extract_fallback():
       target = url_or_query
       if not (target.startswith('http://') or target.startswith('https://')):
@@ -219,7 +220,6 @@ async def on_message(message):
   if message.author.bot:
     return
 
-  # أمر الدخول للروم الصوتية
   if (
       bot.user.mentioned_in(message)
       or message.content.strip().lower() in ['setup', 'تعال', 'join']
@@ -244,7 +244,6 @@ async def on_message(message):
         f'✅ | **تم الدخول إلى الروم بنجاح:** `{voice_channel.name}`'
     )
 
-  # أمر التشغيل (ش)
   if message.content.startswith('ش '):
     raw_query = message.content[2:].strip()
     if not raw_query:
@@ -304,7 +303,6 @@ async def on_message(message):
       channel_error_msg = f'❌ **خطأ أثناء تشغيل يوتيوب:**\n```{str(e)}```'
       await message.channel.send(channel_error_msg)
 
-  # أمر التخطي (س)
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
       message.guild.voice_client.stop()
@@ -317,7 +315,6 @@ async def on_message(message):
   await bot.process_commands(message)
 
 
-# ==================== (تشغيل البوت) ====================
 if __name__ == '__main__':
   keep_alive()
   TOKEN = os.getenv('DISCORD_TOKEN') or os.getenv('TOKEN')
