@@ -65,8 +65,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
   def __init__(self, source, *, data, volume=0.5):
     super().__init__(source, volume)
     self.data = data
-    self.title = data.get('title')
-    self.url = data.get('url')
+    self.title = data.get('title', 'أغنية غير معروفة')
+    self.url = data.get('webpage_url', data.get('url', ''))
     self.uploader = data.get('uploader', 'غير معروف')
 
   @classmethod
@@ -75,7 +75,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
     data = await loop.run_in_executor(
         None, lambda: ytdl.extract_info(url, download=not stream)
     )
-    if 'entries' in data:
+    if 'entries' in data and data['entries']:
       data = data['entries'][0]
     filename = data['url'] if stream else ytdl.prepare_filename(data)
     return cls(
@@ -88,15 +88,29 @@ queues = {}
 
 
 async def resolve_smart_query(query, loop):
-  """تحويل روابط يوتيوب وسبوتيفاي إلى عنوان البحث لـ SoundCloud لتفادي حظر سيرفرات Render"""
+  """يحاول تشغيل رابط يوتيوب من المصدر الأصلي أولاً، وفي حال الحظر يتحول تلقائياً إلى SoundCloud"""
   query = query.strip()
 
-  # 1. روابط يوتيوب -> استخراج العنوان عبر oEmbed والبحث في SoundCloud
+  # 1. روابط يوتيوب -> محاولة المصدر الأصلي أولاً
   if 'youtube.com' in query or 'youtu.be' in query:
     clean_url = query.split('&list=')[0].split('?list=')[0]
+
+    def test_yt():
+      return ytdl.extract_info(clean_url, download=False)
+
+    try:
+      data = await loop.run_in_executor(None, test_yt)
+      if data:
+        return clean_url
+    except Exception as e:
+      print(
+          f'YouTube Direct Blocked ({e}), switching to SoundCloud fallback...'
+      )
+
+    # التحويل الاحتياطي عند حظر يوتيوب عبر oEmbed
     oembed_url = f'https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url, safe="")}&format=json'
 
-    def fetch_yt():
+    def fetch_yt_oembed():
       req = urllib.request.Request(
           oembed_url, headers={'User-Agent': 'Mozilla/5.0'}
       )
@@ -104,13 +118,13 @@ async def resolve_smart_query(query, loop):
         return json.loads(resp.read().decode()).get('title')
 
     try:
-      title = await loop.run_in_executor(None, fetch_yt)
+      title = await loop.run_in_executor(None, fetch_yt_oembed)
       if title:
         return f'scsearch:{title}'
     except Exception as e:
       print(f'oEmbed YT Error: {e}')
 
-  # 2. روابط سبوتيفاي -> استخراج العنوان والبحث في SoundCloud
+  # 2. روابط سبوتيفاي -> استخراج العنوان عبر oEmbed والبحث في SoundCloud
   elif 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
@@ -128,7 +142,7 @@ async def resolve_smart_query(query, loop):
     except Exception as e:
       print(f'oEmbed Spotify Error: {e}')
 
-  # 3. روابط ساوند كلاود المباشرة أو أي منصة أخرى
+  # 3. روابط ساوند كلاود أو الروابط المباشرة
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
@@ -146,15 +160,23 @@ async def on_ready():
   )
 
 
-async def play_next(guild_id, channel, loop_bot):
+async def play_next(guild, channel, loop_bot):
+  guild_id = guild.id
   if guild_id in queues and len(queues[guild_id]) > 0:
-    next_url, author, ctx = queues[guild_id].pop(0)
+    next_query, author = queues[guild_id].pop(0)
+    voice_client = guild.voice_client
+
+    if not voice_client or not voice_client.is_connected():
+      return
+
     try:
-      player = await YTDLSource.from_url(next_url, loop=loop_bot, stream=True)
-      ctx.voice_client.play(
+      player = await YTDLSource.from_url(
+          next_query, loop=loop_bot, stream=True
+      )
+      voice_client.play(
           player,
           after=lambda e: asyncio.run_coroutine_threadsafe(
-              play_next(guild_id, channel, loop_bot), loop_bot
+              play_next(guild, channel, loop_bot), loop_bot
           ),
       )
       embed = discord.Embed(
@@ -164,6 +186,7 @@ async def play_next(guild_id, channel, loop_bot):
       await channel.send(embed=embed)
     except Exception as e:
       print(f'خطأ في تشغيل التالي: {e}')
+      await play_next(guild, channel, loop_bot)
 
 
 @bot.event
@@ -196,7 +219,7 @@ async def on_message(message):
         f'✅ | **تم الدخول إلى الروم بنجاح:** `{voice_channel.name}`'
     )
 
-  # 2. أمر التشغيل الذكي (ش [اسم الأغنية / رابط يوتيوب / سبوتيفاي / ساوند كلاود])
+  # 2. أمر التشغيل (ش [اسم الأغنية / رابط])
   if message.content.startswith('ش '):
     raw_query = message.content[2:].strip()
     if not raw_query:
@@ -223,7 +246,6 @@ async def on_message(message):
 
     try:
       async with message.channel.typing():
-        # المعالجة الذكية للروابط
         search_query = await resolve_smart_query(raw_query, bot.loop)
         player = await YTDLSource.from_url(
             search_query, loop=bot.loop, stream=True
@@ -236,9 +258,7 @@ async def on_message(message):
       ):
         if guild_id not in queues:
           queues[guild_id] = []
-        queues[guild_id].append(
-            (search_query, message.author.name, message.channel)
-        )
+        queues[guild_id].append((search_query, message.author.name))
         embed = discord.Embed(
             description=f'📌 | **تم إضافتها إلى الطابور:** **{player.title}**',
             color=discord.Color.green(),
@@ -248,7 +268,7 @@ async def on_message(message):
         message.guild.voice_client.play(
             player,
             after=lambda e: asyncio.run_coroutine_threadsafe(
-                play_next(guild_id, message.channel, bot.loop), bot.loop
+                play_next(message.guild, message.channel, bot.loop), bot.loop
             ),
         )
         embed = discord.Embed(
