@@ -15,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'YouTube Bot with POT Provider is Online!'
+  return 'YouTube Music Bot is Online!'
 
 
 def run():
@@ -41,7 +41,7 @@ elif os.path.exists('cookies.txt'):
   cookie_path = 'cookies.txt'
   print('✅ تم العثور على ملف الكوكيز المحلي (cookies.txt)', flush=True)
 
-# ==================== (إعدادات yt-dlp مع دعم PO Token) ====================
+# ==================== (إعدادات yt-dlp) ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -66,7 +66,7 @@ ytdl_format_options = {
         'youtube': {
             'player_client': ['tv_embedded', 'ios', 'mweb', 'android'],
             'player_skip': ['webpage', 'configs'],
-            'po_token': 'auto',  # استدعاء تلقائي لمكتبة yt-dlp-get-pot
+            'po_token': 'auto',
         }
     },
 }
@@ -79,6 +79,78 @@ ffmpeg_options = {
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+
+
+# ==================== (دالة استخراج الصوت عبر Piped لتجاوز الحظر) ====================
+def get_direct_audio_via_piped(query_or_url):
+  """استخراج رابط الصوت المباشر بدون حظر عبر سيرفرات Piped الوسيطة"""
+  video_id = None
+
+  # استخراج Video ID من الأشكال المختلفة للروابط
+  if 'v=' in query_or_url:
+    video_id = query_or_url.split('v=')[1].split('&')[0]
+  elif 'youtu.be/' in query_or_url:
+    video_id = query_or_url.split('youtu.be/')[1].split('?')[0]
+
+  piped_instances = [
+      'https://pipedapi.kavin.rocks',
+      'https://api.piped.private.coffee',
+      'https://pipedapi.mha.fi',
+  ]
+
+  # إذا كان إدخال بحث نصي (وليس رابط مباشر)
+  if not video_id and not (
+      query_or_url.startswith('http://') or query_or_url.startswith('https://')
+  ):
+    for instance in piped_instances:
+      try:
+        search_url = (
+            f'{instance}/search?q={urllib.parse.quote(query_or_url)}&filter=all'
+        )
+        req = urllib.request.Request(
+            search_url, headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+          data = json.loads(resp.read().decode())
+          items = data.get('items', [])
+          if items:
+            video_id = items[0].get('url', '').replace('/watch?v=', '')
+            if video_id:
+              break
+      except Exception:
+        continue
+
+  if not video_id:
+    return None
+
+  # تجربة استخراج الصوت المباشر باستخدام الـ ID
+  for instance in piped_instances:
+    try:
+      url = f'{instance}/streams/{video_id}'
+      req = urllib.request.Request(
+          url, headers={'User-Agent': 'Mozilla/5.0'}
+      )
+      with urllib.request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read().decode())
+        audio_streams = [
+            s
+            for s in data.get('audioStreams', [])
+            if s.get('url') and not s.get('videoOnly')
+        ]
+        if audio_streams:
+          best_audio = sorted(
+              audio_streams, key=lambda x: x.get('bitrate', 0), reverse=True
+          )[0]
+          return {
+              'url': best_audio['url'],
+              'title': data.get('title', 'أغنية من يوتيوب'),
+              'uploader': data.get('uploader', 'YouTube Channel'),
+              'webpage_url': f'https://www.youtube.com/watch?v={video_id}',
+          }
+    except Exception:
+      continue
+
+  return None
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -94,10 +166,29 @@ class YTDLSource(discord.PCMVolumeTransformer):
   async def from_url(cls, url_or_query, *, loop=None, stream=True):
     loop = loop or asyncio.get_event_loop()
 
+    # 1. المحاولة الأولى عبر Piped API (لتخطي حظر Render IPs)
+    piped_data = await loop.run_in_executor(
+        None, lambda: get_direct_audio_via_piped(url_or_query)
+    )
+
+    if piped_data:
+      return cls(
+          discord.FFmpegPCMAudio(piped_data['url'], **ffmpeg_options),
+          data=piped_data,
+      )
+
+    # 2. المحاولة الثانية عبر yt-dlp في حال فشل السيرفر الوسيط
     def extract(target):
       return ytdl.extract_info(target, download=not stream)
 
-    data = await loop.run_in_executor(None, lambda: extract(url_or_query))
+    clean_target = url_or_query
+    if not (
+        clean_target.startswith('http://')
+        or clean_target.startswith('https://')
+    ):
+      clean_target = f'ytsearch:{clean_target}'
+
+    data = await loop.run_in_executor(None, lambda: extract(clean_target))
 
     if data and 'entries' in data and data['entries']:
       valid_entries = [e for e in data['entries'] if e]
@@ -105,7 +196,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         data = valid_entries[0]
 
     if not data or 'url' not in data:
-      raise Exception('لم يرجع يوتيوب أي رابط صوتي صالح.')
+      raise Exception('تعذر استخراج مقطع الصوت من يوتيوب.')
 
     filename = data['url'] if stream else ytdl.prepare_filename(data)
     return cls(
@@ -115,18 +206,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
 
 queues = {}
-
-
-async def resolve_smart_query(query):
-  query = query.strip()
-
-  if 'youtube.com' in query or 'youtu.be' in query:
-    return query.split('&list=')[0].split('?list=')[0]
-
-  elif query.startswith('http://') or query.startswith('https://'):
-    return query
-
-  return f'ytsearch:{query}'
 
 
 @bot.event
@@ -154,12 +233,12 @@ async def play_next(guild, channel, loop_bot):
           ),
       )
       embed = discord.Embed(
-          title='♪ Now Playing (YouTube Direct + POT)', color=discord.Color.red()
+          title='♪ Now Playing (YouTube)', color=discord.Color.red()
       )
       embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{author}`'
       await channel.send(embed=embed)
     except Exception as e:
-      await channel.send(f'❌ **خطأ يوتيوب المباشر:** `{e}`')
+      await channel.send(f'❌ **خطأ في التشغيل:** `{e}`')
       await play_next(guild, channel, loop_bot)
 
 
@@ -218,9 +297,8 @@ async def on_message(message):
 
     try:
       async with message.channel.typing():
-        search_query = await resolve_smart_query(raw_query)
         player = await YTDLSource.from_url(
-            search_query, loop=bot.loop, stream=True
+            raw_query, loop=bot.loop, stream=True
         )
 
       guild_id = message.guild.id
@@ -230,7 +308,7 @@ async def on_message(message):
       ):
         if guild_id not in queues:
           queues[guild_id] = []
-        queues[guild_id].append((search_query, message.author.name))
+        queues[guild_id].append((raw_query, message.author.name))
         embed = discord.Embed(
             description=f'📌 | **تم إضافتها إلى الطابور:** **{player.title}**',
             color=discord.Color.green(),
@@ -244,14 +322,12 @@ async def on_message(message):
             ),
         )
         embed = discord.Embed(
-            title='♪ Now Playing (YouTube Direct + POT)', color=discord.Color.red()
+            title='♪ Now Playing (YouTube)', color=discord.Color.red()
         )
         embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{message.author.name}`'
         await message.channel.send(embed=embed)
     except Exception as e:
-      await message.channel.send(
-          f'❌ **خطأ يوتيوب المباشر:**\n```{str(e)}```'
-      )
+      await message.channel.send(f'❌ **خطأ أثناء تشغيل يوتيوب:**\n```{str(e)}```')
 
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
