@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -9,7 +10,7 @@ from discord.ext import commands
 from flask import Flask
 import yt_dlp
 
-# ==================== (سيرفر Flask للتشغيل 24/7) ====================
+# ==================== (سيرفر Flask للتشغيل 24/7 على Render) ====================
 app = Flask('')
 
 
@@ -29,19 +30,7 @@ def keep_alive():
   t.start()
 
 
-# ==================== (فحص وقراءة ملف الكوكيز) ====================
-cookie_path = None
-if os.path.exists('/etc/secrets/cookies.txt'):
-  cookie_path = '/etc/secrets/cookies.txt'
-  print(
-      '✅ تم العثور على ملف الكوكيز في Render (/etc/secrets/cookies.txt)',
-      flush=True,
-  )
-elif os.path.exists('cookies.txt'):
-  cookie_path = 'cookies.txt'
-  print('✅ تم العثور على ملف الكوكيز المحلي (cookies.txt)', flush=True)
-
-# ==================== (إعدادات yt-dlp) ====================
+# ==================== (إعدادات البوت والـ Intents) ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -49,6 +38,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# ==================== (إعدادات yt-dlp الاحتياطية المتبسطة) ====================
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -61,14 +51,6 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
-    'cookiefile': cookie_path,
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['tv_embedded', 'ios', 'mweb', 'android'],
-            'player_skip': ['webpage', 'configs'],
-            'po_token': 'auto',
-        }
-    },
 }
 
 ffmpeg_options = {
@@ -81,54 +63,53 @@ ffmpeg_options = {
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 
-# ==================== (دالة استخراج الصوت عبر Piped لتجاوز الحظر) ====================
-def get_direct_audio_via_piped(query_or_url):
-  """استخراج رابط الصوت المباشر بدون حظر عبر سيرفرات Piped الوسيطة"""
+# ==================== (دالة استخراج الصوت عبر Piped API لتجاوز الحظر) ====================
+def get_piped_audio_stream(url_or_query):
+  """استخراج رابط الصوت المباشر من سيرفرات Piped الوسيطة لتخطي حظر Render نهائياً"""
   video_id = None
 
-  # استخراج Video ID من الأشكال المختلفة للروابط
-  if 'v=' in query_or_url:
-    video_id = query_or_url.split('v=')[1].split('&')[0]
-  elif 'youtu.be/' in query_or_url:
-    video_id = query_or_url.split('youtu.be/')[1].split('?')[0]
-
-  piped_instances = [
-      'https://pipedapi.kavin.rocks',
-      'https://api.piped.private.coffee',
-      'https://pipedapi.mha.fi',
-  ]
-
-  # إذا كان إدخال بحث نصي (وليس رابط مباشر)
-  if not video_id and not (
-      query_or_url.startswith('http://') or query_or_url.startswith('https://')
-  ):
-    for instance in piped_instances:
+  # 1. استخراج الـ ID إذا كان الإدخال رابط يوتيوب
+  if 'youtube.com' in url_or_query or 'youtu.be' in url_or_query:
+    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11})', url_or_query)
+    if match:
+      video_id = match.group(1)
+  else:
+    # 2. إذا كان بحثاً نصياً، البحث داخل Piped API
+    search_instances = [
+        'https://pipedapi.kavin.rocks',
+        'https://api.piped.private.coffee',
+        'https://pipedapi.mha.fi',
+    ]
+    for instance in search_instances:
       try:
-        search_url = (
-            f'{instance}/search?q={urllib.parse.quote(query_or_url)}&filter=all'
-        )
+        req_url = f'{instance}/search?q={urllib.parse.quote(url_or_query)}&filter=all'
         req = urllib.request.Request(
-            search_url, headers={'User-Agent': 'Mozilla/5.0'}
+            req_url, headers={'User-Agent': 'Mozilla/5.0'}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
-          data = json.loads(resp.read().decode())
-          items = data.get('items', [])
-          if items:
-            video_id = items[0].get('url', '').replace('/watch?v=', '')
-            if video_id:
-              break
+          res = json.loads(resp.read().decode())
+          items = res.get('items', [])
+          if items and 'url' in items[0]:
+            video_id = items[0]['url'].split('v=')[-1]
+            break
       except Exception:
         continue
 
   if not video_id:
     return None
 
-  # تجربة استخراج الصوت المباشر باستخدام الـ ID
-  for instance in piped_instances:
+  # 3. جلب رابط الصوت المباشر بجودة عالية باستخدام الـ ID
+  stream_instances = [
+      'https://pipedapi.kavin.rocks',
+      'https://api.piped.private.coffee',
+      'https://pipedapi.mha.fi',
+  ]
+
+  for instance in stream_instances:
     try:
-      url = f'{instance}/streams/{video_id}'
+      api_url = f'{instance}/streams/{video_id}'
       req = urllib.request.Request(
-          url, headers={'User-Agent': 'Mozilla/5.0'}
+          api_url, headers={'User-Agent': 'Mozilla/5.0'}
       )
       with urllib.request.urlopen(req, timeout=5) as resp:
         data = json.loads(resp.read().decode())
@@ -166,42 +147,33 @@ class YTDLSource(discord.PCMVolumeTransformer):
   async def from_url(cls, url_or_query, *, loop=None, stream=True):
     loop = loop or asyncio.get_event_loop()
 
-    # 1. المحاولة الأولى عبر Piped API (لتخطي حظر Render IPs)
-    piped_data = await loop.run_in_executor(
-        None, lambda: get_direct_audio_via_piped(url_or_query)
+    # المحاولة الأولى عبر Piped API (لتخطي حظر Render IPs بالكامل)
+    audio_data = await loop.run_in_executor(
+        None, lambda: get_piped_audio_stream(url_or_query)
     )
 
-    if piped_data:
+    if audio_data:
       return cls(
-          discord.FFmpegPCMAudio(piped_data['url'], **ffmpeg_options),
-          data=piped_data,
+          discord.FFmpegPCMAudio(audio_data['url'], **ffmpeg_options),
+          data=audio_data,
       )
 
-    # 2. المحاولة الثانية عبر yt-dlp في حال فشل السيرفر الوسيط
-    def extract(target):
-      return ytdl.extract_info(target, download=not stream)
+    # المحاولة الثانية (Fallback) عبر yt-dlp الأساسي
+    def extract_fallback():
+      target = url_or_query
+      if not (target.startswith('http://') or target.startswith('https://')):
+        target = f'ytsearch:{target}'
+      return ytdl.extract_info(target, download=False)
 
-    clean_target = url_or_query
-    if not (
-        clean_target.startswith('http://')
-        or clean_target.startswith('https://')
-    ):
-      clean_target = f'ytsearch:{clean_target}'
-
-    data = await loop.run_in_executor(None, lambda: extract(clean_target))
-
-    if data and 'entries' in data and data['entries']:
-      valid_entries = [e for e in data['entries'] if e]
-      if valid_entries:
-        data = valid_entries[0]
+    data = await loop.run_in_executor(None, extract_fallback)
+    if 'entries' in data and data['entries']:
+      data = data['entries'][0]
 
     if not data or 'url' not in data:
-      raise Exception('تعذر استخراج مقطع الصوت من يوتيوب.')
+      raise Exception('تعذر استخراج الصوت من يوتيوب.')
 
-    filename = data['url'] if stream else ytdl.prepare_filename(data)
     return cls(
-        discord.FFmpegPCMAudio(filename, **ffmpeg_options),
-        data=data,
+        discord.FFmpegPCMAudio(data['url'], **ffmpeg_options), data=data
     )
 
 
@@ -247,6 +219,7 @@ async def on_message(message):
   if message.author.bot:
     return
 
+  # أمر الدخول للروم الصوتية
   if (
       bot.user.mentioned_in(message)
       or message.content.strip().lower() in ['setup', 'تعال', 'join']
@@ -271,6 +244,7 @@ async def on_message(message):
         f'✅ | **تم الدخول إلى الروم بنجاح:** `{voice_channel.name}`'
     )
 
+  # أمر التشغيل (ش)
   if message.content.startswith('ش '):
     raw_query = message.content[2:].strip()
     if not raw_query:
@@ -327,8 +301,10 @@ async def on_message(message):
         embed.description = f'**[{player.title}]({player.url})**\nby **{player.uploader}**\nRequested by `{message.author.name}`'
         await message.channel.send(embed=embed)
     except Exception as e:
-      await message.channel.send(f'❌ **خطأ أثناء تشغيل يوتيوب:**\n```{str(e)}```')
+      await channel_error_msg = f'❌ **خطأ أثناء تشغيل يوتيوب:**\n```{str(e)}```'
+      await message.channel.send(channel_error_msg)
 
+  # أمر التخطي (س)
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
       message.guild.voice_client.stop()
@@ -348,4 +324,4 @@ if __name__ == '__main__':
   if TOKEN:
     bot.run(TOKEN)
   else:
-    print('❌ ERROR: لم يتم العثور على التوكن!', flush=True)
+    print('❌ ERROR: لم يتم العثور على التوكن في البيئة!', flush=True)

@@ -2,4 +2,3 @@ discord.py[voice]
 flask
 yt-dlp>=2025.01.01
 PyNaCl
-yt-dlp-get-pot
