@@ -15,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Music Bot is Online and Streaming 24/7!'
+  return 'Music Bot with OAuth2 Support is Online!'
 
 
 def run():
@@ -29,13 +29,6 @@ def keep_alive():
   t.start()
 
 
-# ==================== (الكشف التلقائي عن الكوكيز) ====================
-cookie_path = None
-if os.path.exists('/etc/secrets/cookies.txt'):
-  cookie_path = '/etc/secrets/cookies.txt'
-elif os.path.exists('cookies.txt'):
-  cookie_path = 'cookies.txt'
-
 # ==================== (إعدادات البوت و yt-dlp) ====================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -44,7 +37,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp المتطورة لتجاوز حظر يوتيوب على السيرفرات
+# خيارات yt-dlp مع تفعيل OAuth2 للتسجيل كـ Smart TV
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -53,10 +46,12 @@ ytdl_format_options = {
     'nocheckcertificate': True,
     'ignoreerrors': True,
     'logtostderr': False,
-    'quiet': True,
-    'no_warnings': True,
+    'quiet': False,  # تم تفعيل المخرجات لرؤية رمز OAuth2 في Logs
+    'no_warnings': False,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
+    'username': 'oauth2',  # تفعيل OAuth2
+    'password': '',
     'extractor_args': {
         'youtube': {
             'player_client': ['android_vr', 'web_creator', 'ios', 'android'],
@@ -64,12 +59,6 @@ ytdl_format_options = {
         }
     },
 }
-
-if cookie_path:
-  ytdl_format_options['cookiefile'] = cookie_path
-  print(f'✅ [Cookies] تم العثور على ملف الكوكيز واستخدامه من: {cookie_path}')
-else:
-  print('⚠️ [Cookies] لم يتم العثور على ملف cookies.txt (يعمل بدون كوكيز)')
 
 ffmpeg_options = {
     'before_options': (
@@ -99,13 +88,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     data = None
 
-    # 1. محاولة التشغيل المباشر عبر يوتيوب
+    # 1. محاولة التشغيل المباشر عبر يوتيوب (بواسطة حساب OAuth2)
     try:
       data = await loop.run_in_executor(None, lambda: extract(url_or_query))
     except Exception as e:
-      print(f'⚠️ فشل يوتيوب المباشر ({e})، جاري التحديد والتحويل البديل...')
+      print(f'⚠️ تنبيه يوتيوب ({e})، جاري التجهيز للتحويل الاحتياطي...')
 
-    # إذا رجعت القائمة تحتوي على نتائج بحث يوتيوب
     if data and 'entries' in data and data['entries']:
       valid_entries = [e for e in data['entries'] if e]
       if valid_entries:
@@ -113,7 +101,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
       else:
         data = None
 
-    # 2. خطة الطوارئ: التحويل إلى SoundCloud مع فلترة ملفات DRM تلقائياً
+    # 2. خطة الطوارئ: التحويل إلى SoundCloud في حال تعذر يوتيوب
     if not data or 'url' not in data:
       clean_search = (
           url_or_query.replace('ytsearch:', '').split('&')[0].split('?')[0]
@@ -127,7 +115,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
         for entry in sc_data['entries']:
           if not entry:
             continue
-          # تجنب مقاطع DRM المعتمدة في ساوند كلاود
           try:
             test_data = await loop.run_in_executor(
                 None, lambda: extract(entry['webpage_url'])
@@ -139,9 +126,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
             continue
 
     if not data or 'url' not in data:
-      raise Exception(
-          'تعذر جلب الصوت من يوتيوب أو SoundCloud. يرجى تجربة اسم آخر.'
-      )
+      raise Exception('تعذر جلب الصوت. يرجى تجربة اسم أو رابط آخر.')
 
     filename = data['url'] if stream else ytdl.prepare_filename(data)
     return cls(
@@ -156,11 +141,9 @@ queues = {}
 async def resolve_smart_query(query, loop):
   query = query.strip()
 
-  # رابط يوتيوب مباشر
   if 'youtube.com' in query or 'youtu.be' in query:
     return query.split('&list=')[0].split('?list=')[0]
 
-  # رابط سبوتيفاي -> جلب العنوان والبحث
   elif 'spotify.com' in query:
     oembed_url = f'https://open.spotify.com/oembed?url={urllib.parse.quote(query, safe="")}'
 
@@ -181,17 +164,14 @@ async def resolve_smart_query(query, loop):
   elif query.startswith('http://') or query.startswith('https://'):
     return query
 
-  # البحث النصي المباشر
   return f'ytsearch:{query}'
 
 
 @bot.event
 async def on_ready():
-  print(f'تم تسجيل الدخول بنجاح: {bot.user.name}')
+  print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}')
   await bot.change_presence(
-      activity=discord.Game(
-          name='Multi-Platform Music | YouTube / Spotify / SoundCloud'
-      )
+      activity=discord.Game(name='Music 24/7 | OAuth2 Enabled')
   )
 
 
@@ -229,7 +209,6 @@ async def on_message(message):
   if message.author.bot:
     return
 
-  # 1. إدخال البوت للروم الصوتية
   if (
       bot.user.mentioned_in(message)
       or message.content.strip().lower() in ['setup', 'تعال', 'join']
@@ -254,7 +233,6 @@ async def on_message(message):
         f'✅ | **تم الدخول إلى الروم بنجاح:** `{voice_channel.name}`'
     )
 
-  # 2. أمر التشغيل (ش [اسم الأغنية / رابط])
   if message.content.startswith('ش '):
     raw_query = message.content[2:].strip()
     if not raw_query:
@@ -314,7 +292,6 @@ async def on_message(message):
     except Exception as e:
       await message.channel.send(f'❌ | **حدث خطأ أثناء جلب الأغنية:** `{e}`')
 
-  # 3. أمر التخطي (س)
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
       message.guild.voice_client.stop()
@@ -334,7 +311,4 @@ if __name__ == '__main__':
   if TOKEN:
     bot.run(TOKEN)
   else:
-    print(
-        '❌ ERROR: لم يتم العثور على التوكن! يرجى إضافته في Environment'
-        ' Variables باسم DISCORD_TOKEN أو TOKEN.'
-    )
+    print('❌ ERROR: لم يتم العثور على التوكن!')
