@@ -12,94 +12,6 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Music Bot is Online and Streaming 24/7!'
-
-
-def run():
-  port = int(os.environ.get('PORT', 8080))
-  app.run(host='0.0.0.0', port=port)
-
-
-def keep_alive():
-  t = threading.Thread(target=run)
-  t.start()
-
-
-# ==================== (إعدادات البوت) ====================
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.voice_states = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# إعدادات yt-dlp عامة بدون أي كوكيز أو تقييد
-ytdl_format_options = {
-    'format': 'bestaudio/best',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-    'restrictfilenames': True,
-    'noplaylist': True,
-    'nocheckcertificate': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'auto',
-    'source_address': '0.0.0.0',
-}
-
-ffmpeg_options = {
-    'before_options': (
-        '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
-    ),
-    'options': '-vn -b:a 192k',
-}
-
-ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-
-
-class YTDLSource(discord.PCMVolumeTransformer):
-
-  def __init__(self, source, *, data, volume=0.5):
-    super().__init__(source, volume)
-    self.data = data
-    self.title = data.get('title')
-    self.url = data.get('url')
-    self.uploader = data.get('uploader', 'غير معروف')
-
-  @classmethod
-  async def from_url(cls, url, *, loop=None, stream=True):
-    loop = loop or asyncio.get_event_loop()
-    data = await loop.run_in_executor(
-        None, lambda: ytdl.extract_info(url, download=not stream)
-    )
-    if 'entries' in data:
-      data = data['entries'][0]
-    filename = data['url'] if stream else ytdl.prepare_filename(data)
-    return cls(
-        فكرة عبقرية ومريحة جداً يا وحش! فعلاً الابتعاد عن يوتيوب والاعتماد على **SoundCloud** يحل المشكلة من جذورها؛ البوت بيصير عام للكل، بدون تسجيل دخول، وبدون مشاكل حظر أو كابتشا، وكل شخص يقدر يشغل اللي بده إياه بحرية تامة.
-
-كل ما علينا فعله هو تغيير محرك البحث الافتراضي في الكود من يوتيوب (`ytsearch`) إلى ساوند كلاود (`scsearch`)، بالإضافة إلى دعم الروابط المباشرة لأي منصة أخرى.
-
----
-
-### الكود النهائي والكامل لـ `main.py` (يعمل حصرياً على SoundCloud والروابط العامة):
-
-```python
-import asyncio
-import os
-import threading
-import discord
-from discord.ext import commands
-from flask import Flask
-import yt_dlp
-
-# ==================== (سيرفر Flask للتشغيل 24/7) ====================
-app = Flask('')
-
-
-@app.route('/')
-def home():
   return 'Music Bot is Online and Streaming 24/7 via SoundCloud!'
 
 
@@ -259,7 +171,6 @@ async def on_message(message):
       if message.guild.voice_client.channel != voice_channel:
         await message.guild.voice_client.move_to(voice_channel)
 
-    # التحويل للبحث المباشر عبر ساوند كلاود بدلاً من يوتيوب
     search_query = query if query.startswith('http') else f'scsearch:{query}'
 
     try:
