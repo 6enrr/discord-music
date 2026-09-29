@@ -6,6 +6,7 @@ from discord.ext import commands
 from flask import Flask
 import yt_dlp
 
+# ==================== (سيرفر Flask للتشغيل 24/7) ====================
 app = Flask('')
 
 
@@ -24,6 +25,7 @@ def keep_alive():
   t.start()
 
 
+# ==================== (إعدادات البوت) ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -31,6 +33,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# خيارات yt-dlp مع تجاوز حماية يوتيوب (Client Spoofing)
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -43,6 +46,7 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
+    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
 }
 
 ffmpeg_options = {
@@ -86,7 +90,9 @@ queues = {}
 async def on_ready():
   print(f'تم تسجيل الدخول بنجاح: {bot.user.name}')
   await bot.change_presence(
-      activity=discord.Game(name='اكتب "ش [اسم الأغنية]" للتشغيل')
+      activity=discord.Game(
+          name='امنشني أو اكتب setup للدخول | ش [اسم الأغنية]'
+      )
   )
 
 
@@ -115,6 +121,32 @@ async def on_message(message):
   if message.author.bot:
     return
 
+  # 1. إدخال البوت للروم عن طريق المنشن أو كتابة setup أو تعال
+  if (
+      bot.user.mentioned_in(message)
+      or message.content.strip().lower() in ['setup', 'تعال', 'join']
+  ):
+    if not message.author.voice:
+      return await message.channel.send(
+          '❌ | **يجب أن تكون متصلاً بروم صوتية لكي أستطيع الدخول إليك!**'
+      )
+
+    voice_channel = message.author.voice.channel
+    if message.guild.voice_client:
+      await message.guild.voice_client.move_to(voice_channel)
+    else:
+      try:
+        await voice_channel.connect()
+      except Exception as e:
+        return await message.channel.send(
+            f'❌ | **تعذر الاتصال بالروم:** `{e}`'
+        )
+
+    return await message.channel.send(
+        f'✅ | **تم الدخول إلى الروم بنجاح:** `{voice_channel.name}`'
+    )
+
+  # 2. أمر التشغيل والبحث (ش [اسم الأغنية أو الرابط])
   if message.content.startswith('ش '):
     query = message.content[2:].strip()
     if not query:
@@ -177,6 +209,7 @@ async def on_message(message):
     except Exception as e:
       await message.channel.send(f'❌ | **حدث خطأ أثناء جلب الأغنية:** `{e}`')
 
+  # 3. أمر التخطي (س)
   elif message.content.strip() == 'س':
     if message.guild.voice_client and message.guild.voice_client.is_playing():
       message.guild.voice_client.stop()
