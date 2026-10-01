@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 import yt_dlp
 
-# ==================== (سيرفر Flask للمراقبة) ====================
+# ==================== (سيرفر Flask للمراقبة وحفظ النشاط) ====================
 from flask import Flask
 
 app = Flask('')
@@ -35,7 +35,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp المحسنة مع تفعيل ملف الـ Cookies لتجاوز حماية يوتيوب
+# إعدادات yt-dlp المتطورة لتجاوز حظر البوتات واختيار أفضل صيغة صوتية متاحة
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -43,16 +43,7 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'geo_bypass': True,
-    'cookiefile': 'cookies.txt',  # <--- ملف الكوكيز لقراءة تسجيل الدخول
-    'extractor_args': {
-        'youtube': {
-            'player_client': [
-                'android',
-                'ios',
-                'web',
-            ]
-        }
-    },
+    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
 }
 
 ffmpeg_options = {
@@ -64,7 +55,6 @@ ffmpeg_options = {
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-# نظام إدارة الطابور لكل سيرفر
 guild_queues = {}
 
 
@@ -91,6 +81,9 @@ class YTDLSource(discord.PCMVolumeTransformer):
   @classmethod
   async def from_url(cls, url, *, loop=None, stream=True):
     loop = loop or asyncio.get_event_loop()
+    if '&list=' in url:
+      url = url.split('&list=')[0]
+
     data = await loop.run_in_executor(
         None, lambda: ytdl.extract_info(url, download=not stream)
     )
@@ -102,158 +95,103 @@ class YTDLSource(discord.PCMVolumeTransformer):
     return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 
-async def play_next(ctx, vc):
+@bot.event
+async def on_ready():
+  print(f'Logged in as {bot.user.name} (ID: {bot.user.id})')
+  print('Bot is ready and connected to Discord!')
+
+
+async def play_next(ctx):
   q = get_queue(ctx.guild.id)
-  if len(q.queue) == 0:
+  if len(q.queue) > 0:
+    next_url, next_title = q.queue.pop(0)
+    try:
+      player = await YTDLSource.from_url(next_url, loop=bot.loop, stream=True)
+      ctx.voice_client.play(
+          player,
+          after=lambda e: asyncio.run_coroutine_threadsafe(
+              play_next(ctx), bot.loop
+          ),
+      )
+      await ctx.send(f'🎶 **جاري تشغيل الآن:** `{player.title}`')
+    except Exception as e:
+      await ctx.send(f'❌ حدث خطأ أثناء تشغيل الأغنية التالية: {e}')
+      await play_next(ctx)
+  else:
+    if ctx.voice_client:
+      await ctx.voice_client.disconnect()
+
+
+@bot.command(name='play', aliases=['p'])
+async def play(ctx, *, url):
+  if not ctx.author.voice:
+    await ctx.send('❌ يجب أن تكون في روم صوتية لتشغيل الموسيقى!')
     return
 
-  next_player = q.queue.pop(0)
+  channel = ctx.author.voice.channel
+  if ctx.voice_client is None:
+    await channel.connect()
+  elif ctx.voice_client.channel != channel:
+    await ctx.move_to(channel)
 
-  def after_playing(error):
-    if error:
-      print(f'خطأ في المشغل: {error}')
-    fut = asyncio.run_coroutine_threadsafe(play_next(ctx, vc), bot.loop)
+  async with ctx.typing():
     try:
-      fut.result()
+      player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
     except Exception as e:
-      print(e)
+      await ctx.send(f'❌ **حدث خطأ أثناء جلب أو تشغيل الأغنية:**\n```{e}```')
+      return
 
-  vc.play(next_player, after=after_playing)
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+      q = get_queue(ctx.guild.id)
+      q.queue.append((url, player.title))
+      await ctx.send(
+          f'📥 **تمت إضافة الأغنية إلى الطابور:** `{player.title}` (الترتيب:'
+          f' {len(q.queue)})'
+      )
+    else:
+      ctx.voice_client.play(
+          player,
+          after=lambda e: asyncio.run_coroutine_threadsafe(
+              play_next(ctx), bot.loop
+          ),
+      )
+      await ctx.send(f'🎶 **جاري تشغيل الآن:** `{player.title}`')
 
-  embed = discord.Embed(
-      title='♪ تشغيل الآن', color=discord.Color.from_rgb(255, 119, 0)
-  )
-  embed.description = f'**[{next_player.title}]({next_player.url})**'
+
+@bot.command(name='skip', aliases=['s'])
+async def skip(ctx):
+  if ctx.voice_client and ctx.voice_client.is_playing():
+    ctx.voice_client.stop()
+    await ctx.send('⏭️ **تم تخطي الأغنية!**')
+  else:
+    await ctx.send('❌ لا توجد أغنية قيد التشغيل حالياً لتخطيها.')
+
+
+@bot.command(name='queue', aliases=['q'])
+async def queue_info(ctx):
+  q = get_queue(ctx.guild.id)
+  if not q.queue:
+    await ctx.send('📭 طابور التشغيل فارغ حالياً.')
+    return
+
+  embed = discord.Embed(title='🎶 طابور التشغيل الحالي', color=discord.Color.blue())
+  queue_list = ''
+  for i, (_, title) in enumerate(q.queue, 1):
+    queue_list += f'**{i}.** {title}\n'
+  embed.description = queue_list
   await ctx.send(embed=embed)
 
 
-@bot.event
-async def on_ready():
-  print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}')
-  print('🚀 [Bot] البوت جاهز تماماً وبدون أخطاء يوتيوب!')
-
-
-@bot.event
-async def on_message(message):
-  if message.author.bot:
-    return
-
-  content = message.content.strip().lower()
-
-  # 1. أمر الانضمام للروم الصوتية
-  if bot.user.mentioned_in(message) or content in ['setup', 'تعال', 'join']:
-    if not message.author.voice:
-      return await message.channel.send(
-          '❌ | **يجب أن تكون متصلاً بروم صوتية أولاً!**'
-      )
-
-    voice_channel = message.author.voice.channel
-    if message.guild.voice_client:
-      await message.guild.voice_client.move_to(voice_channel)
-    else:
-      await voice_channel.connect()
-
-    return await message.channel.send(
-        f'✅ | **تم الدخول إلى الروم الصوتية:** `{voice_channel.name}`'
-    )
-
-  # 2. أمر التشغيل (ش)
-  if message.content.startswith('ش '):
-    query = message.content[2:].strip()
-    if not query:
-      return await message.channel.send(
-          '❌ | **يرجى كتابة اسم الأغنية أو الرابط بعد كلمة "ش"!**'
-      )
-
-    if not message.author.voice:
-      return await message.channel.send(
-          '❌ | **يجب أن تكون متصلاً بروم صوتية أولاً!**'
-      )
-
-    voice_channel = message.author.voice.channel
-    vc = message.guild.voice_client
-
-    if not vc:
-      try:
-        vc = await voice_channel.connect()
-      except Exception as e:
-        return await message.channel.send(
-            f'❌ | **تعذر الاتصال بالروم الصوتية:** `{e}`'
-        )
-    elif vc.channel != voice_channel:
-      await vc.move_to(voice_channel)
-
-    async with message.channel.typing():
-      try:
-        player = await YTDLSource.from_url(query, loop=bot.loop, stream=True)
-        q = get_queue(message.guild.id)
-
-        if vc.is_playing() or vc.is_paused():
-          q.queue.append(player)
-          embed = discord.Embed(
-              description=(
-                  '📌 | **تمت الإضافة إلى الطابور:**'
-                  f' **[{player.title}]({player.url})** (الترتيب:'
-                  f' {len(q.queue)})'
-              ),
-              color=discord.Color.green(),
-          )
-          await message.channel.send(embed=embed)
-        else:
-
-          def after_playing(error):
-            if error:
-              print(f'خطأ: {error}')
-            fut = asyncio.run_coroutine_threadsafe(
-                play_next(message, vc), bot.loop
-            )
-            try:
-              fut.result()
-            except Exception as e:
-              print(e)
-
-          vc.play(player, after=after_playing)
-          embed = discord.Embed(
-              title='♪ تشغيل الآن', color=discord.Color.from_rgb(255, 119, 0)
-          )
-          embed.description = f'**[{player.title}]({player.url})**'
-          await message.channel.send(embed=embed)
-
-      except Exception as e:
-        await message.channel.send(
-            f'❌ | **حدث خطأ أثناء جلب أو تشغيل الأغنية:**\n```{e}```'
-        )
-
-  # 3. أمر التخطي (س / skip)
-  elif content in ['س', 'skip', 'تخطي']:
-    vc = message.guild.voice_client
-    if vc and (vc.is_playing() or vc.is_paused()):
-      vc.stop()
-      await message.channel.send('⏭ | **تم تخطي الأغنية والانتقال للتالية!**')
-    else:
-      await message.channel.send(
-          '❌ | **لا توجد أي أغنية تعمل حالياً للتخطي.**'
-      )
-
-  # 4. أمر الخروج والإيقاف
-  elif content in ['وقف', 'stop', 'disconnect', 'طللع']:
-    vc = message.guild.voice_client
-    q = get_queue(message.guild.id)
+@bot.command(name='stop')
+async def stop(ctx):
+  if ctx.voice_client:
+    q = get_queue(ctx.guild.id)
     q.queue.clear()
-    if vc and vc.is_connected():
-      await vc.disconnect()
-      await message.channel.send('🔌 | **تم إيقاف البوت وتفريغ الطابور والخروج.**')
-    else:
-      await message.channel.send('❌ | **البوت ليس متصلاً بأي روم صوتية أساساً.**')
-
-  await bot.process_commands(message)
+    await ctx.voice_client.disconnect()
+    await ctx.send('🛑 **تم إيقاف البوت ومسح الطابور وخروج الروم.**')
 
 
-if __name__ == '__main__':
-  keep_alive()
-  TOKEN = os.getenv('DISCORDTOKEN')
-
-  if TOKEN:
-    bot.run(TOKEN)
-  else:
-    print('❌ ERROR: لم يتم العثور على التوكن!')
+# تشغيل سيرفر الـ Flask في الخلفية ثم تشغيل البوت
+keep_alive()
+TOKEN = os.environ.get('DISCORDTOKEN')
+bot.run(TOKEN)
