@@ -35,7 +35,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp المحسنة لتتخطى حماية يوتيوب نهائياً
+# خيارات yt-dlp المحسنة مع تفعيل ملف الـ Cookies لتجاوز حماية يوتيوب
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -43,7 +43,16 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'geo_bypass': True,
-    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    'cookiefile': 'cookies.txt',  # <--- ملف الكوكيز لقراءة تسجيل الدخول
+    'extractor_args': {
+        'youtube': {
+            'player_client': [
+                'android',
+                'ios',
+                'web',
+            ]
+        }
+    },
 }
 
 ffmpeg_options = {
