@@ -3,16 +3,17 @@ import os
 import threading
 import discord
 from discord.ext import commands
-from flask import Flask
-import wavelink
+import yt_dlp
 
-# ==================== (سيرفر Flask للمراقبة و 24/7 Uptime) ====================
+# ==================== (سيرفر Flask للمراقبة) ====================
+from flask import Flask
+
 app = Flask('')
 
 
 @app.route('/')
 def home():
-  return 'Lavalink Dedicated Music Bot is Online & Ready!'
+  return 'Music Bot is Online & Ready!'
 
 
 def run():
@@ -26,7 +27,7 @@ def keep_alive():
   t.start()
 
 
-# ==================== (إعدادات البوت) ====================
+# ==================== (إعدادات البوت والطابور) ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -34,80 +35,123 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# إعدادات الاتصال بسيرفر Lavalink
-LAVALINK_HOST = os.getenv('LAVALINK_HOST', '127.0.0.1')
-LAVALINK_PORT = int(os.getenv('LAVALINK_PORT', 2333))
-LAVALINK_PASSWORD = os.getenv('LAVALINK_PASSWORD', 'youshallnotpass')
+# خيارات yt-dlp المحسنة لتتخطى حماية يوتيوب نهائياً
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',
+    'geo_bypass': True,
+    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+}
+
+ffmpeg_options = {
+    'before_options': (
+        '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+    ),
+    'options': '-vn',
+}
+
+ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+
+# نظام إدارة الطابور لكل سيرفر
+guild_queues = {}
+
+
+class MusicQueue:
+
+  def __init__(self):
+    self.queue = []
+
+
+def get_queue(guild_id):
+  if guild_id not in guild_queues:
+    guild_queues[guild_id] = MusicQueue()
+  return guild_queues[guild_id]
+
+
+class YTDLSource(discord.PCMVolumeTransformer):
+
+  def __init__(self, source, *, data, volume=0.5):
+    super().__init__(source, volume)
+    self.data = data
+    self.title = data.get('title')
+    self.url = data.get('webpage_url')
+
+  @classmethod
+  async def from_url(cls, url, *, loop=None, stream=True):
+    loop = loop or asyncio.get_event_loop()
+    data = await loop.run_in_executor(
+        None, lambda: ytdl.extract_info(url, download=not stream)
+    )
+
+    if 'entries' in data:
+      data = data['entries'][0]
+
+    filename = data['url'] if stream else ytdl.prepare_filename(data)
+    return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+
+
+async def play_next(ctx, vc):
+  q = get_queue(ctx.guild.id)
+  if len(q.queue) == 0:
+    return
+
+  next_player = q.queue.pop(0)
+
+  def after_playing(error):
+    if error:
+      print(f'خطأ في المشغل: {error}')
+    fut = asyncio.run_coroutine_threadsafe(play_next(ctx, vc), bot.loop)
+    try:
+      fut.result()
+    except Exception as e:
+      print(e)
+
+  vc.play(next_player, after=after_playing)
+
+  embed = discord.Embed(
+      title='♪ تشغيل الآن', color=discord.Color.from_rgb(255, 119, 0)
+  )
+  embed.description = f'**[{next_player.title}]({next_player.url})**'
+  await ctx.send(embed=embed)
 
 
 @bot.event
 async def on_ready():
   print(f'✅ تم تسجيل الدخول بنجاح: {bot.user.name}')
-
-  # ربط البوت بمحرك Lavalink
-  node = wavelink.Node(
-      uri=f'http://{LAVALINK_HOST}:{LAVALINK_PORT}', password=LAVALINK_PASSWORD
-  )
-  try:
-    await wavelink.Pool.connect(nodes=[node], client=bot)
-    print(
-        '🚀 [Lavalink] تم الاتصال بنجاح بسيرفر الصوت:'
-        f' {LAVALINK_HOST}:{LAVALINK_PORT}'
-    )
-  except Exception as e:
-    print(f'❌ [Lavalink] تعذر الاتصال بسيرفر Lavalink: {e}')
-
-  await bot.change_presence(
-      activity=discord.Game(name='High-Quality Audio | Powered by Lavalink')
-  )
+  print('🚀 [Bot] البوت جاهز تماماً وبدون أخطاء يوتيوب!')
 
 
-@bot.event
-async def on_wavelink_node_ready(payload: wavelink.NodeReadyEvent):
-  print(
-      f'📡 Lavalink Node [{payload.node.identifier}] جاهز تماماً لمعالجة الصوت!'
-  )
-
-
-# ==================== (الأوامر والفعاليات) ====================
 @bot.event
 async def on_message(message):
   if message.author.bot:
     return
 
-  # 1. أمر إدخال البوت (setup / تعال / join / منشن)
-  if bot.user.mentioned_in(message) or message.content.strip().lower() in [
-      'setup',
-      'تعال',
-      'join',
-  ]:
+  content = message.content.strip().lower()
+
+  # 1. أمر الانضمام للروم الصوتية
+  if bot.user.mentioned_in(message) or content in ['setup', 'تعال', 'join']:
     if not message.author.voice:
       return await message.channel.send(
           '❌ | **يجب أن تكون متصلاً بروم صوتية أولاً!**'
       )
 
     voice_channel = message.author.voice.channel
-    vc: wavelink.Player = message.guild.voice_client
-
-    if vc:
-      await vc.move_to(voice_channel)
+    if message.guild.voice_client:
+      await message.guild.voice_client.move_to(voice_channel)
     else:
-      try:
-        vc = await voice_channel.connect(cls=wavelink.Player)
-        vc.inactive_timeout = 300  # الخروج التلقائي بعد 5 دقائق من الخمول
-      except Exception as e:
-        return await message.channel.send(
-            f'❌ | **تعذر الاتصال بالروم:** `{e}`'
-        )
+      await voice_channel.connect()
 
     return await message.channel.send(
         f'✅ | **تم الدخول إلى الروم الصوتية:** `{voice_channel.name}`'
     )
 
-  # 2. أمر التشغيل (ش [اسم الأغنية / رابط / قائمة تشغيل])
+  # 2. أمر التشغيل (ش)
   if message.content.startswith('ش '):
-    raw_query = message.content[2:].strip()
-    if not raw_query:
+    query = message.content[2:].strip()
+    if not query:
       return await message.channel.send(
           '❌ | **يرجى كتابة اسم الأغنية أو الرابط بعد كلمة "ش"!**'
       )
@@ -118,12 +162,11 @@ async def on_message(message):
       )
 
     voice_channel = message.author.voice.channel
-    vc: wavelink.Player = message.guild.voice_client
+    vc = message.guild.voice_client
 
     if not vc:
       try:
-        vc = await voice_channel.connect(cls=wavelink.Player)
-        vc.inactive_timeout = 300
+        vc = await voice_channel.connect()
       except Exception as e:
         return await message.channel.send(
             f'❌ | **تعذر الاتصال بالروم الصوتية:** `{e}`'
@@ -131,85 +174,77 @@ async def on_message(message):
     elif vc.channel != voice_channel:
       await vc.move_to(voice_channel)
 
-    try:
-      async with message.channel.typing():
-        # البحث المباشر: إذا كان رابطاً يتم جلب الرابط، وإذا كان اسماً يتم البحث في SoundCloud مباشرة لضمان العمل
-        if raw_query.startswith(('http://', 'https://')):
-          tracks = await wavelink.Playable.search(raw_query)
-        else:
-          tracks = await wavelink.Playable.search(
-              raw_query, source=wavelink.Search.scsearch
-          )
+    async with message.channel.typing():
+      try:
+        player = await YTDLSource.from_url(query, loop=bot.loop, stream=True)
+        q = get_queue(message.guild.id)
 
-        if not tracks:
-          return await message.channel.send(
-              '❌ | **لم يتم العثور على نتائج لبحثك!**'
-          )
-
-        # معالجة قوائم التشغيل (Playlist)
-        if isinstance(tracks, wavelink.Playlist):
-          added = await vc.queue.put_wait(tracks)
+        if vc.is_playing() or vc.is_paused():
+          q.queue.append(player)
           embed = discord.Embed(
               description=(
-                  '🎵 | **تم إضافة قائمة التشغيل:**'
-                  f' **[{tracks.name}]({raw_query})** ({added} أغنية)'
+                  '📌 | **تمت الإضافة إلى الطابور:**'
+                  f' **[{player.title}]({player.url})** (الترتيب:'
+                  f' {len(q.queue)})'
               ),
-              color=discord.Color.blue(),
+              color=discord.Color.green(),
           )
           await message.channel.send(embed=embed)
         else:
-          track = tracks[0]
-          await vc.queue.put_wait(track)
 
-          if vc.is_playing():
-            embed = discord.Embed(
-                description=(
-                    '📌 | **تم إضافتها إلى الطابور:**'
-                    f' **[{track.title}]({track.uri})**'
-                ),
-                color=discord.Color.green(),
+          def after_playing(error):
+            if error:
+              print(f'خطأ: {error}')
+            fut = asyncio.run_coroutine_threadsafe(
+                play_next(message, vc), bot.loop
             )
-            await message.channel.send(embed=embed)
+            try:
+              fut.result()
+            except Exception as e:
+              print(e)
 
-        # إذا لم يكن هناك شيء يعمل حالياً، نبدأ تشغيل الطابور
-        if not vc.is_playing():
-          await vc.play(vc.queue.get())
-          track = vc.current
+          vc.play(player, after=after_playing)
           embed = discord.Embed(
-              title='♪ Now Playing', color=discord.Color.from_rgb(255, 119, 0)
+              title='♪ تشغيل الآن', color=discord.Color.from_rgb(255, 119, 0)
           )
-          embed.description = (
-              f'**[{track.title}]({track.uri})**\nبواسطة:'
-              f' **{track.author}**\nبطلب من: `{message.author.name}`'
-          )
+          embed.description = f'**[{player.title}]({player.url})**'
           await message.channel.send(embed=embed)
 
-    except Exception as e:
-      await message.channel.send(
-          f'❌ | **حدث خطأ أثناء معالجة الطلب:** `{e}`'
-      )
+      except Exception as e:
+        await message.channel.send(
+            f'❌ | **حدث خطأ أثناء جلب أو تشغيل الأغنية:**\n```{e}```'
+        )
 
-  # 3. أمر التخطي (س)
-  elif message.content.strip() == 'س':
-    vc: wavelink.Player = message.guild.voice_client
-    if vc and vc.is_playing():
-      await vc.skip(force=True)
-      await message.channel.send('⏭️ | **تم تخطي الأغنية بنجاح!**')
+  # 3. أمر التخطي (س / skip)
+  elif content in ['س', 'skip', 'تخطي']:
+    vc = message.guild.voice_client
+    if vc and (vc.is_playing() or vc.is_paused()):
+      vc.stop()  # إيقاف الحالية سيشغل التالية تلقائياً من الطابور
+      await message.channel.send('⏭ | **تم تخطي الأغنية والانتقال للتالية!**')
     else:
       await message.channel.send(
           '❌ | **لا توجد أي أغنية تعمل حالياً للتخطي.**'
       )
 
+  # 4. أمر الخروج والإيقاف
+  elif content in ['وقف', 'stop', 'disconnect', 'طللع']:
+    vc = message.guild.voice_client
+    q = get_queue(message.guild.id)
+    q.queue.clear()
+    if vc and vc.is_connected():
+      await vc.disconnect()
+      await message.channel.send('🔌 | **تم إيقاف البوت وتفريغ الطابور والخروج.**')
+    else:
+      await message.channel.send('❌ | **البوت ليس متصلاً بأي روم صوتية أساساً.**')
+
   await bot.process_commands(message)
 
 
-# ==================== (التشغيل التنفيذي) ====================
 if __name__ == '__main__':
   keep_alive()
-  TOKEN = os.getenv('DISCORD_TOKEN') or os.getenv('TOKEN')
+  TOKEN = os.getenv('DISCORDTOKEN')
+
   if TOKEN:
     bot.run(TOKEN)
   else:
-    print(
-        '❌ ERROR: لم يتم العثور على التوكن! يرجى ضبط المتغير DISCORD_TOKEN.'
-    )
+    print('❌ ERROR: لم يتم العثور على التوكن!')
