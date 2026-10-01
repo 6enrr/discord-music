@@ -2,4 +2,3 @@ discord.py[voice]
 yt-dlp>=2025.01.01
 flask
 PyNaCl
-requests

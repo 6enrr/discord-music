@@ -35,8 +35,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# خيارات yt-dlp مع إضافة دعم البروكسي المنزلي/الخارجي لتجاوز حظر ريلوي
-# (استبدل 'http://YOUR_PROXY_IP:PORT' برابط البروكسي الحقيقي إن وجد، أو اتركه فارغاً)
+# خيارات yt-dlp المحسنة لتتخطى حماية يوتيوب نهائياً
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -44,7 +43,6 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'geo_bypass': True,
-    # 'proxy': 'http://YOUR_PROXY_IP:PORT',  <-- ضع رابط البروكسي هنا إذا كان لديك بروكسي جاهز
     'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
 }
 
@@ -221,7 +219,7 @@ async def on_message(message):
   elif content in ['س', 'skip', 'تخطي']:
     vc = message.guild.voice_client
     if vc and (vc.is_playing() or vc.is_paused()):
-      vc.stop()
+      vc.stop()  # إيقاف الحالية سيشغل التالية تلقائياً من الطابور
       await message.channel.send('⏭ | **تم تخطي الأغنية والانتقال للتالية!**')
     else:
       await message.channel.send(
