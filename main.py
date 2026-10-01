@@ -35,15 +35,15 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# إعدادات yt-dlp المتطورة لتجاوز حظر البوتات واختيار أفضل صيغة صوتية متاحة
+# التعديل النهائي الصارم لتجاوز حظر يوتيوب والصيغ
 ytdl_format_options = {
-    'format': 'bestaudio/best',
+    'format': 'bestaudio',
     'noplaylist': True,
     'quiet': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'geo_bypass': True,
-    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    'extractor_args': {'youtube': {'player_client': ['android']}},
 }
 
 ffmpeg_options = {
@@ -191,7 +191,7 @@ async def stop(ctx):
     await ctx.send('🛑 **تم إيقاف البوت ومسح الطابور وخروج الروم.**')
 
 
-# تشغيل سيرفر الـ Flask في الخلفية ثم تشغيل البوت
+# تشغيل سيرفر الـ Flask وحفظ النشاط
 keep_alive()
 TOKEN = os.environ.get('DISCORDTOKEN')
 bot.run(TOKEN)
