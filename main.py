@@ -17,6 +17,7 @@ def home():
 
 
 def run():
+  # قراءة البورت الديناميكي المخصص من Render لتجنب خطأ الإغلاق المبكر
   port = int(os.environ.get('PORT', 8080))
   app.run(host='0.0.0.0', port=port)
 
