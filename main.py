@@ -43,17 +43,7 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'geo_bypass': True,
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['ios', 'android', 'web'],
-        }
-    },
-    'http_headers': {
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,'
-            ' like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        )
-    },
+    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
 }
 
 ffmpeg_options = {
