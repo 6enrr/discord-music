@@ -17,7 +17,6 @@ def home():
 
 
 def run():
-  # قراءة البورت الديناميكي المخصص من Render لتجنب خطأ الإغلاق المبكر
   port = int(os.environ.get('PORT', 8080))
   app.run(host='0.0.0.0', port=port)
 
@@ -44,7 +43,17 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'geo_bypass': True,
-    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios', 'android', 'web'],
+        }
+    },
+    'http_headers': {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,'
+            ' like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+    },
 }
 
 ffmpeg_options = {
@@ -220,7 +229,7 @@ async def on_message(message):
   elif content in ['س', 'skip', 'تخطي']:
     vc = message.guild.voice_client
     if vc and (vc.is_playing() or vc.is_paused()):
-      vc.stop()  # إيقاف الحالية سيشغل التالية تلقائياً من الطابور
+      vc.stop()
       await message.channel.send('⏭ | **تم تخطي الأغنية والانتقال للتالية!**')
     else:
       await message.channel.send(

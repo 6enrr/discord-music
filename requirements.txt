@@ -1,5 +1,4 @@
-discord.py[voice]
+discord.py
+yt-dlp>=2026.3.0
 flask
-yt-dlp>=2025.01.01
 PyNaCl
-wavelink
